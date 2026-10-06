@@ -1,0 +1,183 @@
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+}
+
+function safeBoundaryAtOrBefore(text, index) {
+  if (index > 0 && index < text.length) {
+    const current = text.charCodeAt(index);
+    const previous = text.charCodeAt(index - 1);
+    if (current >= 0xdc00 && current <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff) return index - 1;
+  }
+  return index;
+}
+
+function nextCodePointBoundary(text, index) {
+  const codePoint = text.codePointAt(index);
+  return index + (codePoint > 0xffff ? 2 : 1);
+}
+
+function largestFittingEnd(text, start, fits, signal) {
+  let low = start + 1;
+  let high = text.length;
+  let best = start;
+
+  while (low <= high) {
+    throwIfAborted(signal);
+    const middle = Math.floor((low + high) / 2);
+    const end = safeBoundaryAtOrBefore(text, middle);
+    if (end <= start) {
+      low = middle + 1;
+      continue;
+    }
+
+    const fitsSlice = fits(text.slice(start, end), { start, end });
+    throwIfAborted(signal);
+    if (fitsSlice) {
+      best = end;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
+}
+
+function lastWhitespaceEnd(text, start, end) {
+  let result = start;
+  for (let index = start; index < end;) {
+    const next = nextCodePointBoundary(text, index);
+    if (/\s/u.test(text.slice(index, next))) result = next;
+    index = next;
+  }
+  return result;
+}
+
+/** Split text into fitting, contiguous slices while preserving every source character. */
+export function paginateText(text, fits, { signal } = {}) {
+  if (typeof text !== 'string') throw new TypeError('text must be a string');
+  if (typeof fits !== 'function') throw new TypeError('fits must be a function');
+  throwIfAborted(signal);
+  if (text.length === 0) return [{ start: 0, end: 0, text: '' }];
+
+  const fragments = [];
+  let start = 0;
+  while (start < text.length) {
+    throwIfAborted(signal);
+    const fittingEnd = largestFittingEnd(text, start, fits, signal);
+    const whitespaceEnd = fittingEnd > start ? lastWhitespaceEnd(text, start, fittingEnd) : start;
+    let end = fittingEnd === text.length
+      ? text.length
+      : whitespaceEnd > start ? whitespaceEnd : fittingEnd;
+
+    if (end === start) {
+      // An oversized word has no fitting whitespace boundary. Force one full
+      // Unicode code point so even a too-tall glyph cannot stall pagination.
+      end = nextCodePointBoundary(text, start);
+    }
+
+    fragments.push({ start, end, text: text.slice(start, end) });
+    start = end;
+  }
+  return fragments;
+}
+
+/** Return the fragment containing a UTF-16 source offset, clamped to the last fragment. */
+export function fragmentAt(fragments, offset) {
+  if (!fragments.length) return -1;
+  const target = Number.isFinite(offset) ? offset : 0;
+  let low = 0;
+  let high = fragments.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const fragment = fragments[middle];
+    if (target < fragment.start) high = middle - 1;
+    else if (target >= fragment.end && middle < fragments.length - 1) low = middle + 1;
+    else return middle;
+  }
+  return Math.max(0, Math.min(fragments.length - 1, low));
+}
+
+/** Navigate a book whose source pages each expand into one or more text fragments. */
+export function createBookPager({ count, loadFragments }) {
+  if (!Number.isInteger(count) || count < 0) throw new TypeError('count must be a nonnegative integer');
+  if (typeof loadFragments !== 'function') throw new TypeError('loadFragments must be a function');
+
+  const pageNumber = value => Math.max(1, Math.min(count || 1, Number.isFinite(value) ? Math.floor(value) : 1));
+  const sourceOffset = value => Number.isFinite(value) ? Math.max(0, value) : 0;
+
+  function pageReader() {
+    const loaded = new Map();
+    return async page => {
+      if (!loaded.has(page)) loaded.set(page, await loadFragments(page));
+      return loaded.get(page);
+    };
+  }
+
+  async function seekForward(read, page, index = 0) {
+    for (let currentPage = page; currentPage <= count; currentPage += 1) {
+      const fragments = await read(currentPage);
+      if (index >= 0 && index < fragments.length) return { page: currentPage, index, fragment: fragments[index] };
+      index = 0;
+    }
+    return null;
+  }
+
+  async function seekBackward(read, page, index) {
+    for (let currentPage = page; currentPage >= 1; currentPage -= 1) {
+      const fragments = await read(currentPage);
+      const candidate = currentPage === page ? Math.min(index, fragments.length - 1) : fragments.length - 1;
+      if (candidate >= 0) return { page: currentPage, index: candidate, fragment: fragments[candidate] };
+    }
+    return null;
+  }
+
+  return {
+    async spread(anchor = { page: 1, offset: 0 }, size = 1) {
+      const read = pageReader();
+      const requestedPage = pageNumber(anchor?.page);
+      if (count === 0) return { anchor: { page: 1, offset: 0 }, leaves: [], next: null };
+
+      let located = await seekForward(read, requestedPage, 0);
+      const requestedFragments = await read(requestedPage);
+      if (located && requestedFragments.length) {
+        const fragments = requestedFragments;
+        const index = fragmentAt(fragments, sourceOffset(anchor?.offset));
+        located = await seekForward(read, requestedPage, index);
+      }
+
+      const first = located;
+      const leaves = [];
+      const limit = Math.max(1, Number.isFinite(size) ? Math.floor(size) : 1);
+      while (located && leaves.length < limit) {
+        leaves.push({ ...located.fragment, page: located.page });
+        located = await seekForward(read, located.page, located.index + 1);
+      }
+
+      const normalizedAnchor = first
+        ? { page: first.page, offset: first.fragment.start }
+        : { page: requestedPage, offset: 0 };
+      const next = located ? { page: located.page, offset: located.fragment.start } : null;
+      return { anchor: normalizedAnchor, leaves, next };
+    },
+
+    async previous(anchor = { page: 1, offset: 0 }, steps = 1) {
+      const read = pageReader();
+      const requestedPage = pageNumber(anchor?.page);
+      if (count === 0) return { page: 1, offset: 0 };
+      const fragments = await read(requestedPage);
+      const currentIndex = fragmentAt(fragments, sourceOffset(anchor?.offset));
+      let located = currentIndex >= 0
+        ? { page: requestedPage, index: currentIndex, fragment: fragments[currentIndex] }
+        : await seekForward(read, requestedPage + 1, 0);
+
+      const distance = Math.max(0, Number.isFinite(steps) ? Math.floor(steps) : 1);
+      for (let step = 0; step < distance; step += 1) {
+        if (!located) return { page: 1, offset: 0 };
+        located = await seekBackward(read, located.page, located.index - 1);
+      }
+      return located
+        ? { page: located.page, offset: located.fragment.start }
+        : { page: 1, offset: 0 };
+    },
+  };
+}

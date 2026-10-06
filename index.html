@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#eee7d8">
+  <meta name="description" content="Your PDFs, with a little more room to breathe. A private, local reading room.">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <title>Folio — a little room for reading</title>
+  <script>if (location.protocol === 'file:') document.documentElement.classList.add('file-launch');</script>
+  <style>
+    #file-launch-note { display: none; }
+    .file-launch body { margin: 0; background: #eee7d8; color: #392b20; font-family: Georgia, serif; }
+    .file-launch body > :not(#file-launch-note) { display: none !important; }
+    .file-launch #file-launch-note { display: block; max-width: 480px; margin: 12vh auto; padding: 36px; background: #faf6eb; border: 1px solid #d9cebb; box-shadow: 0 10px 35px #392b2014; line-height: 1.7; }
+    .file-launch h1 { font-size: 36px; font-weight: normal; margin: 0 0 12px; }
+    .file-launch a { display: inline-block; padding: 10px 20px; color: #fffaf5; background: #80553a; text-decoration: none; font: 14px 'Segoe UI', sans-serif; }
+    .file-launch small { display: block; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <section id="file-launch-note" aria-label="Open Folio"><h1>Your reading room is close.</h1><p>Double-click <strong>Start Folio.cmd</strong> in this folder, or use the <strong>Folio</strong> Desktop shortcut. It opens your reader in Chrome.</p><a href="http://127.0.0.1:4173/">Open the running reader ↗</a><small>If the reader is not running yet, use the launcher first. This HTML file is the app’s source page.</small></section>
+  <a class="skip-link" href="#reading-area">Skip to the book</a>
+  <header class="app-header">
+    <a href="/" class="brand" aria-label="Folio home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 7C12 4 6 4 3 5v21c4-2 9-1 13 2 4-3 9-4 13-2V5c-3-1-9-1-13 2Zm0 0v21" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><span>folio<span class="brand-dot">.</span></span></a>
+    <span class="header-motto">Good books. A little quiet.</span>
+    <div class="header-actions"><button id="library-button" class="quiet-button" type="button">My shelf <span id="shelf-count" class="count">0</span></button><button id="import-button" class="primary-button" type="button"><span aria-hidden="true">＋</span> Open a PDF</button></div>
+    <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
+  </header>
+  <main class="workspace">
+    <aside id="book-contents" class="contents-panel" aria-label="Book contents">
+      <div class="eyebrow">YOUR READING ROOM</div><button id="contents-close" class="icon-button contents-close" type="button" aria-label="Close contents">×</button>
+      <div class="book-meta"><div id="book-type" class="small-label">A FOLIO ORIGINAL</div><h1 id="book-title">The Art of Noticing</h1><p id="book-author">A small guide to being here</p></div>
+      <div class="contents-heading"><h2>Contents</h2><button id="edit-chapters" class="text-button" type="button">Edit</button></div>
+      <nav id="chapter-list" aria-label="Chapters"></nav>
+      <p id="chapter-note" class="chapter-note"></p>
+      <button id="drop-zone" class="drop-zone" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 15v5h16v-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Make yourself at home</span><small>Drop a PDF here, or browse</small></button>
+      <div class="privacy-note"><span class="status-dot" aria-hidden="true"></span> Kept here, on your own shelf.</div>
+    </aside>
+    <section class="reader-panel" aria-label="Reader">
+      <div class="reader-toolbar"><button id="contents-toggle" class="quiet-button mobile-contents" type="button" aria-expanded="false" aria-controls="book-contents">Contents</button><div class="view-switch" role="group" aria-label="Reading view"><button id="book-view" class="view-button active" type="button" aria-pressed="true">Book view</button><button id="original-view" class="view-button" type="button" aria-pressed="false">Original PDF</button></div><div class="reading-layout-switch" role="group" aria-label="Reading layout"><button id="pages-layout" class="layout-button active" type="button" aria-pressed="true" title="Smooth book page turns (S)">Page flip</button><button id="scroll-layout" class="layout-button" type="button" aria-pressed="false" title="Continuous scroll (S)">Scroll</button></div><div class="reading-tools"><button id="appearance-button" class="quiet-button type-button" type="button" aria-label="Reading appearance">Aa</button><button id="bookmark-button" class="icon-button" type="button" aria-label="Bookmark this page" title="Bookmark this page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4V4Z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button><button id="focus-button" class="icon-button" type="button" aria-label="Enter focus mode" title="Focus mode (F)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></div></div>
+      <div class="reading-caption"><span id="current-chapter">CHAPTER ONE</span><span id="read-time">TAKE YOUR TIME</span></div>
+      <div id="reading-area" class="book-stage" tabindex="-1"><div id="book-spread" class="book-spread"></div><div id="original-stage" class="original-stage" hidden></div><div id="scroll-stage" class="scroll-stage" tabindex="0" role="region" aria-label="Continuous reading pages" hidden></div></div>
+      <div class="reader-footer"><button id="previous-page" class="page-turn" type="button" aria-label="Previous pages"><span aria-hidden="true">←</span><span>Previous</span></button><form id="page-form" class="page-position"><label for="page-input">Page</label><input id="page-input" name="page" type="number" inputmode="numeric" min="1" value="1" aria-label="Go to page"><span id="total-pages">of 8</span></form><button id="next-page" class="page-turn" type="button" aria-label="Next pages"><span>Next</span><span aria-hidden="true">→</span></button></div>
+      <div class="progress-row"><span id="progress-text">The beginning of something good.</span><input id="progress-slider" class="progress-slider" type="range" min="1" max="8" value="1" aria-label="Reading progress"><span id="progress-percent">0%</span></div>
+      <div class="reader-hint"><span id="navigation-hint">Scroll at your own pace · S to switch</span><span class="hint-divider">·</span><span id="save-status">Your place is kept, automatically.</span></div>
+    </section>
+  </main>
+  <footer class="app-footer"><span>A PLACE TO SLOW DOWN.</span><button id="launch-help" class="text-button" type="button">Make yourself a reading corner <span aria-hidden="true">↗</span></button></footer>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title"><div class="modal-heading"><h2 id="modal-title"></h2><button id="modal-close" class="icon-button" type="button" aria-label="Close dialog">×</button></div><div id="modal-body"></div></dialog>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
