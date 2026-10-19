@@ -7,7 +7,7 @@ A deliberately small reading room in Chrome. Folio's brand is walnut, parchment,
 ## Layout and interactions
 
 - Header: Folio wordmark, personal shelf, one clear Open a PDF action.
-- Left: book title, navigable chapter contents with page references, editable chapters, drag-and-drop import and a privacy cue.
+- Left: book title, expandable Part / Chapter / Section contents with source-page references, editable hierarchy, background scan controls, suggestion review, drag-and-drop import and a privacy cue.
 - Center: a tall portrait book spread by default for new readers; at narrow widths use one page. Page flip animates an actual temporary leaf. Scroll offers a continuous column with one native scroll area. Existing layout preferences are kept. Chapter title and running source page numbers make the content feel like a book.
 - Small toolbar: Book view / Original PDF and a separate Page flip / Scroll toggle (Pages / Scroll for Original PDF), typography and paper preferences, saved page, focus mode. S switches layouts without changing the source page.
 - Footer: previous/next, direct page jump, progress scrubber and keyboard hint. Remember the current book, page, appearance and bookmarks locally.
@@ -18,9 +18,9 @@ A deliberately small reading room in Chrome. Folio's brand is walnut, parchment,
 
 1. Validate PDF extension/type and size (150 MiB maximum); display progress and actionable errors.
 2. PDF.js parses bytes in a bundled local worker. Ask for a password when required.
-3. Prefer PDF outline destinations for chapters. Keep resolved top-level entries; use child entries where parent destinations are absent.
-4. If no usable outline exists, scan up to 120 pages for explicit Chapter/Part/Book headings. This is a conservative heuristic, not semantic understanding or OCR. Explain the scan limit in the UI.
-5. If no headings exist, use one Entire book entry rather than inventing titles. Manual chapter editing accepts a title and its first source page, validates bounds, and saves locally.
+3. Read the complete PDF outline and page labels without text extraction. Keep resolved parents and children, distinct same-page destinations and destination-less group labels anchored by a valid descendant. Display this initial navigation immediately.
+4. Scan every physical page sequentially in the background. Yield and publish a resumable checkpoint every eight pages. Combine printed contents entries, explicit numbered headings, and corroborated heading styles; suppress repeated running text and send uncertain targets to review. Printed numbers need unique PDF page labels or at least two corroborated heading matches to calibrate an offset. No OCR or external service is used. Cancellation and book switches invalidate pending results.
+5. Preserve a fallback Entire book entry when there is no usable structure. Manual corrections are ID-keyed overlays, including removals and added entries. The editor permits same-page starts, validates source-page bounds and parent cycles, and keeps corrections across rescans. Existing manually arranged books are not automatically rescanned.
 6. Extract visible pages on demand. Rebuild lines and paragraphs in Book view, retaining original source-page navigation; use the PDF canvas in Original PDF view for faithful diagrams, tables, layouts and scans.
 7. Save the PDF once in the existing IndexedDB library. Keep progress, bookmarks and chapter-edit overlays in a separate small database, so scroll writes do not touch source bytes or require a library upgrade. Store appearance/layout/active-book preferences in localStorage. Clearly report when storage is unavailable. Browser data clearing removes this local library; keep source PDFs separately.
 
@@ -58,10 +58,13 @@ The initial three-minute brainstorm selected larger source pages with 3D turns. 
 
 - `openPdf` returns a PDFDocumentProxy (caller owns `pdf.loadingTask.destroy()`; PDF.js 6 does not expose proxy `destroy()`).
 - Chapters result: `{chapters: [{title, page}], source: 'outline' | 'headings' | 'fallback', scannedPages: number}`; source pages are always one-based.
+- `src/document-structure.js` exports `STRUCTURE_VERSION`, `readDocumentStructure(pdf, {signal})`, and `analyzeDocumentStructure(pdf, {signal, initial, onProgress, onUpdate})`. The old `detectChapters` API remains for compatibility; the application uses the richer analyzer.
+- Structure: `{version, nodes, candidates, scannedPages: number[], failedPages: number[], totalPages, status, textPages, tocUnresolved, pageLabels?}`. Nodes have stable IDs, `parentId`, title, kind, one-based source `page`, optional PDF `y`, source, confidence and evidence. Compact internal heading/contents/outline evidence accompanies checkpoints and complete results for resumption and failed-page retry; no full-document text or rendered pages are stored there.
+- Structure overlays: `structureEdits` maps node IDs to manual corrections/additions or `{hidden:true}`; `contentsExpanded` maps IDs to disclosure state. `src/structure-model.js` validates navigation links, adapts legacy records and guards scan lifecycles against stale updates. The saved `bookPosition` may include `contentsId` for same-page selection. Navigation is independent of the legacy chapter projection used for book typography, so background updates do not reflow reading text.
 - Page result: `{paragraphs: string[], hasText: boolean}`. Never inject extracted text as HTML.
 - `renderPdfPage` returns after canvas render, scale defaults to 1.4; a signal cancels PDF.js's render task and an optional pixel cap bounds its canvas. Caller coordinates stale results.
 - Stored book: `{id, title, filename, bytes: ArrayBuffer, chapters, source, scannedPages, page, bookmarks: number[], addedAt}`.
-- Reading-place overlay: `{id, page, bookmarks, chapters, source, scrollPosition: {page, fraction, view}, bookPosition: {page, offset}}`; `bookPosition` is optional and uses an offset into extracted paragraphs joined with two newlines, after duplicate standalone heading removal. Reflow chooses the fragment containing that offset. Allowlisted fields never include source bytes. Demo preferences use localStorage.
+- Reading-place overlay: `{id, page, bookmarks, chapters, source, scannedPages, structure, structureEdits, contentsExpanded, scrollPosition: {page, fraction, view}, bookPosition: {page, offset, contentsId?}}`; `bookPosition` is optional and uses an offset into extracted paragraphs joined with two newlines, after duplicate standalone heading removal. Reflow chooses the fragment containing that offset. Allowlisted fields never include source bytes. Demo preferences use localStorage.
 - `paginateText(text, fits, {signal})` returns lossless `{start, end, text}` slices. `createBookPager({count, loadFragments})` walks those slices with `spread(anchor, size)` and `previous(anchor, steps)`. Root owns browser measurement, bounded caching, cancellation and commit. Reflow never changes PDF page totals or chapter/bookmark references.
 - `createPageScroller(container, options)` owns its track, spacers, listeners, observer and loads. Options define count, initial page/fraction, estimates, mount/concurrency limits, page creation/loading and an `onPosition` callback. It returns `jumpTo`, `getPosition`, `reflow`, `destroy` and diagnostic `getStats`.
 - `turnPages({stage, targetPages, direction, singlePage, signal, reducedMotion, duration})` owns temporary layers/classes and returns `finished` or `cancelled`. The caller prepares detached target pages, commits stage content and source-page metadata only after `finished`, and handles cancellation across reader state changes. Source page numbers and existing stored anchors keep their meaning.
@@ -77,7 +80,7 @@ The initial three-minute brainstorm selected larger source pages with 3D turns. 
 
 ## Deliberate limits and future UX
 
-No OCR, cloud sync, notes, search, semantic chapter inference or large library management in this first version. PDFs with columns may extract in the wrong order; Original PDF preserves source layout. Book mode paginates each source page's text on demand, retaining source-page boundaries; it does not merge short source pages into one globally renumbered edition. Scroll pages grow with the text; Page flip uses fitting continuation leaves. Future work, after use: full-text search, optional local OCR, and richer chapter inference with explicit review.
+No OCR, cloud sync, notes, full-text search, language-model inference or large library management is included. Structural detection uses local text/layout heuristics and can require manual review. PDFs with columns may extract in the wrong order; Original PDF preserves source layout. Book mode paginates each source page's text on demand, retaining source-page boundaries; it does not merge short source pages into one globally renumbered edition. Scroll pages grow with the text; Page flip uses fitting continuation leaves. Future work, after use: full-text search, optional local OCR, and optional tagged-heading enrichment.
 
 ## Technical references
 

@@ -85,7 +85,10 @@ export async function listBooks() {
 }
 
 export async function updateBook(id, changes) {
-  const allowed = new Set(['page', 'bookmarks', 'chapters', 'source', 'scrollPosition', 'bookPosition']);
+  const allowed = new Set([
+    'page', 'bookmarks', 'chapters', 'source', 'scrollPosition', 'bookPosition',
+    'structure', 'structureEdits', 'contentsExpanded', 'scannedPages',
+  ]);
   const metadata = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));
   const db = await placesDatabase();
   return new Promise((resolve, reject) => {

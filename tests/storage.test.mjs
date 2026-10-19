@@ -98,6 +98,45 @@ test('progress updates touch only small metadata and retain PDF bytes and older 
   assert.equal('bytes' in shelf[0], false);
 });
 
+test('structure metadata round trips and survives later progress saves without changing PDF bytes', async () => {
+  const structure = {
+    version: 1,
+    nodes: [
+      { id: 'part-1', kind: 'part', title: 'Part I', page: 2, parentId: null },
+      { id: 'chapter-1', kind: 'chapter', title: 'Opening', page: 2, parentId: 'part-1' },
+    ],
+  };
+  const structureEdits = {
+    'chapter-1': { title: 'A New Opening' },
+    'section-added': { title: 'Section 1.1', page: 3, parentId: 'chapter-1', kind: 'section' },
+  };
+  const contentsExpanded = { 'part-1': true, 'chapter-1': false };
+  await updateBook(original.id, {
+    structure,
+    structureEdits,
+    contentsExpanded,
+    scannedPages: 120,
+    source: 'headings',
+  });
+
+  let loaded = await getBook(original.id);
+  assert.deepEqual(loaded.structure, structure);
+  assert.deepEqual(loaded.structureEdits, structureEdits);
+  assert.deepEqual(loaded.contentsExpanded, contentsExpanded);
+  assert.equal(loaded.scannedPages, 120);
+  assert.equal(loaded.source, 'headings');
+  assert.deepEqual(loaded.bytes, original.bytes);
+
+  await updateBook(original.id, { page: 5 });
+  loaded = await getBook(original.id);
+  assert.deepEqual(loaded.structure, structure);
+  assert.deepEqual(loaded.structureEdits, structureEdits);
+  assert.deepEqual(loaded.contentsExpanded, contentsExpanded);
+  assert.equal(loaded.scannedPages, 120);
+  assert.equal(loaded.page, 5);
+  assert.deepEqual(loaded.bytes, original.bytes);
+});
+
 test('later bookmark updates preserve the scroll place, and removal clears both stores', async () => {
   await updateBook(original.id, { bookmarks: [2, 4] });
   const loaded = await getBook(original.id);

@@ -1,0 +1,164 @@
+{
+  "name": "Readwell",
+  "document": "Readwell visual design system",
+  "revision": "2026-10-07",
+  "status": "Proposed design specification; production behavior remains Folio",
+  "recommendation": "Quiet Paper",
+  "colors": {
+    "brand": {
+      "canvas": "#F2EEE7",
+      "surface": "#FBF8F1",
+      "ink": "#302922",
+      "inkMuted": "#554D44",
+      "action": "#704A31",
+      "actionText": "#FFFFFF",
+      "softCoffee": "#D9CBB5",
+      "sage": "#B8C2B3",
+      "dustyBlue": "#AEBCC2",
+      "rule": "#D2C6B8",
+      "focus": "#6A3E27",
+      "success": "#42644B",
+      "error": "#8B3029",
+      "selection": "#E8DACC"
+    },
+    "readingAppearances": {
+      "light": {
+        "status": "New recommended Readwell default; Quiet Paper direction",
+        "canvas": "#F2EEE7",
+        "paper": "#FBF8F1",
+        "paperEdge": "#E5DCCF",
+        "ink": "#302922",
+        "inkMuted": "#554D44",
+        "accent": "#704A31",
+        "rule": "#D2C6B8"
+      },
+      "warmPaper": {
+        "status": "Warm appearance exists in Folio; these are proposed Readwell target values",
+        "canvas": "#EAE0D3",
+        "paper": "#FAF4E8",
+        "paperEdge": "#E1D2BE",
+        "ink": "#302922",
+        "inkMuted": "#554D44",
+        "accent": "#704A31",
+        "rule": "#D2C1AC"
+      },
+      "dark": {
+        "status": "After hours appearance exists in Folio; these are proposed Readwell target values",
+        "canvas": "#211D19",
+        "paper": "#2A251F",
+        "paperEdge": "#493F35",
+        "ink": "#F4EEE5",
+        "inkMuted": "#D2C6B7",
+        "accent": "#DEB590",
+        "rule": "#594D41"
+      }
+    },
+    "directions": {
+      "quietPaper": {
+        "canvas": "#F2EEE7",
+        "surface": "#FBF8F1",
+        "ink": "#302922",
+        "mutedInk": "#554D44",
+        "accent": "#704A31",
+        "softAccent": "#D9CBB5",
+        "rule": "#D2C6B8"
+      },
+      "stillwater": {
+        "canvas": "#F4F2EC",
+        "surface": "#FFFDF8",
+        "ink": "#243038",
+        "accent": "#426B68",
+        "sage": "#ACC5B5",
+        "dustyBlue": "#9EBBCB",
+        "rule": "#D6DDD8"
+      },
+      "gardenMargins": {
+        "canvas": "#F3F4EE",
+        "surface": "#FFFDF9",
+        "ink": "#2D3630",
+        "accent": "#4F6D5A",
+        "softAccent": "#C3D3C3",
+        "coolAccent": "#CBDCE3",
+        "rule": "#D7DDD6"
+      }
+    }
+  },
+  "typography": {
+    "readingFamily": "Georgia, \"Times New Roman\", serif",
+    "interfaceFamily": "\"Segoe UI Variable\", \"Segoe UI\", system-ui, sans-serif",
+    "display": { "size": "52px", "weight": 400, "lineHeight": 1.04, "letterSpacing": "-0.035em" },
+    "sectionHeading": { "size": "34px", "weight": 400, "lineHeight": 1.12 },
+    "bookTitle": { "size": "30px", "weight": 400, "lineHeight": 1.16 },
+    "chapterTitle": { "size": "34px", "weight": 400, "lineHeight": 1.1 },
+    "readingBody": { "size": "19px", "weight": 400, "lineHeight": 1.72, "measure": "48ch per spread page; 62ch max in single-page scroll" },
+    "readingBodyMobile": { "size": "18px", "weight": 400, "lineHeight": 1.74, "measure": "38ch" },
+    "interface": { "size": "14px", "weight": 400, "lineHeight": 1.45 },
+    "button": { "size": "14px", "weight": 600, "lineHeight": 1.2 },
+    "caption": { "size": "12px", "weight": 500, "lineHeight": 1.4 },
+    "overline": { "size": "11px", "weight": 600, "lineHeight": 1.3, "letterSpacing": "0.09em" },
+    "numeric": "tabular-nums"
+  },
+  "spacingPx": [4, 8, 12, 16, 24, 32, 48, 64],
+  "layout": {
+    "desktopArtboard": "1280x760",
+    "desktopPageGutter": "40px",
+    "desktopHeaderHeight": "68px",
+    "desktopContentsWidth": "272px",
+    "desktopColumnGap": "24px",
+    "readerMaxWidth": "1160px",
+    "spreadMaxWidth": "1080px",
+    "spreadPageRatio": "0.72:1",
+    "pageTextMeasure": "48ch per spread leaf; 62ch max in single-page scroll",
+    "pageInset": "48px",
+    "mobileArtboard": "390x844",
+    "mobileGutter": "16px",
+    "mobileHeaderHeight": "60px",
+    "mobileTouchTarget": "44x44px"
+  },
+  "borders": {
+    "hairline": "1px solid color.rule",
+    "keyboardFocus": "2px solid color.focus with 3px offset",
+    "iconStroke": "1.75px",
+    "pageCrease": "1px central rule plus a 12px soft inner gradient"
+  },
+  "radiiPx": {
+    "input": 4,
+    "button": 6,
+    "card": 10,
+    "dialog": 14,
+    "page": 2,
+    "pill": 999
+  },
+  "shadows": {
+    "card": "0 4px 18px rgba(48, 41, 34, 0.06)",
+    "popover": "0 12px 32px rgba(48, 41, 34, 0.14)",
+    "book": "0 20px 46px rgba(48, 41, 34, 0.13), 0 2px 6px rgba(48, 41, 34, 0.08)"
+  },
+  "motion": {
+    "control": "160ms ease-out",
+    "dialog": "180ms ease-out",
+    "pageTurn": "240ms ease-in-out; existing Folio behavior is 420ms",
+    "reducedMotion": "No animated page turn; commit the destination immediately"
+  },
+  "breakpointsPx": {
+    "wideDesktop": 1200,
+    "compactDesktop": 960,
+    "mobile": 720,
+    "smallMobile": 390
+  },
+  "coffeeMotif": {
+    "asset": "assets/coffee-motif.svg",
+    "treatment": "Single-line ceramic cup with two pale coffee-ring arcs; decorative zones only, never behind reading text",
+    "stroke": "#704A31",
+    "ring": "#B39573 at 28% opacity",
+    "minimumUIUse": "Do not use the motif as an icon-only control or status indicator"
+  },
+  "contrastRatios": {
+    "inkOnCanvas": "12.39:1",
+    "mutedInkOnCanvas": "7.17:1",
+    "actionOnCanvas": "6.69:1",
+    "whiteOnAction": "7.74:1",
+    "warmInkOnWarmPaper": "13.08:1",
+    "darkInkOnNightPaper": "13.17:1"
+  }
+}
