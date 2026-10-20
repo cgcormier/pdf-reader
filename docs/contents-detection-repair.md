@@ -1,6 +1,7 @@
 # Contents detection repair
 
-Status: design under review; implementation and measured results will be recorded below.
+Status: implemented locally and verified on 2026-10-19. No commit or publication
+was requested for this repair.
 
 ## Problem and verified baseline
 
@@ -12,11 +13,10 @@ the heading grammar. Top-margin exclusion also removes genuine act openings.
 
 ## Scope and ownership
 
-- Root owns integration, scan upgrade policy, final verification, and this plan.
-- Detector worker initially reviews this plan; implementation requires a follow-up
-  assignment and is restricted to src/document-structure.js and detector tests.
-- Adversarial reviewer reads source and research, identifies failure cases, and
-  proposes acceptance tests. No source edits or descendant agents.
+- Root owns integration, final verification, README, and this plan.
+- The detector lane covers src/document-structure.js and detector tests.
+- The adversarial review informed the design before its follow-up lifecycle lane:
+  the scan policy in src/main.js, src/structure-model.js and model tests.
 - All workers use gpt-6.1-sol with high reasoning, fresh bounded briefs, and no
   commits, pushes, installs, PDF modifications, shelf mutations, or unrelated edits.
 - Preserve dirty files and the existing storage model. No OCR, external document
@@ -57,7 +57,23 @@ outdated completed automatic snapshots on opening a book. Explicitly cancelled
 scans and manual arrangements remain under user control. Current-version partial
 scans resume normally. Manual overlays and saved reading positions remain outside
 the replaced snapshot and must survive. Preserve stable IDs for unchanged existing
-heading families where practical. No database reset or PDF-byte rewrite.
+heading families exactly. Renamed, hidden, reparented and accepted entries must
+remain effective after a version upgrade; reconcile changed identities only with
+specific evidence rather than silently duplicating or resurrecting entries.
+No database reset or PDF-byte rewrite.
+
+## Review decisions
+
+- Validate every offset-derived page against the document bounds, including
+  unresolved candidates. Duplicate anchors cannot establish an offset alone.
+- Order coordinate-less outline parents deliberately on the same page as their
+  scanned children; preserve multiple explicitly positioned boundaries.
+- Keep Act/Scene numbers in matching identity, and distinguish identical scene
+  labels at different vertical positions. Avoid changing existing family IDs.
+- Test numeric tables and mixed Contents/opening pages. Page classification must
+  not turn every numeric row into a reference or erase a separate real opening.
+- Hamlet's Contents links point to external local HTML files, not internal PDF
+  destinations. Ignore those links; recover the structure from the actual pages.
 
 ## Acceptance and verification
 
@@ -84,6 +100,36 @@ heading families where practical. No database reset or PDF-byte rewrite.
   demonstrate font-popularity-based body detection and custom heading logic.
   These support combining layout and syntax; they do not prove this detector's
   thresholds or provide a drop-in JavaScript fix.
+
+## Measured results and limits
+
+- Version 2 scans all 144 Hamlet pages without extraction failures. It finds five
+  Acts at PDF pages 8, 40, 64, 96 and 120, and all twenty Scenes at their exact
+  page/vertical anchors with the correct Act parents. There are 26 navigation
+  entries including Opening pages, zero alleged printed TOC references, and no
+  dialogue counters or abbreviated running labels in navigation or review.
+- Review suggestions fall from 993 to 1. The remaining body-sized numbered
+  quotation on introductory page 4 stays reviewable. Confidence is categorical
+  evidence, not a calculated probability or a model score.
+- All 97 tests pass, including the optional local Hamlet test, an original
+  generated play through PDF.js, numeric-table/dialogue negatives, preserved
+  ordinary heading IDs, stale checkpoint replacement, scan opt-outs, correction
+  preservation and the two existing 132-page book fixtures. The original play
+  fixture always runs; the Hamlet test skips when that local download is absent.
+- The production build and git diff whitespace checks pass.
+- In the isolated browser origin on port 4187, the bundled sample completed its
+  scan. A renamed entry and a removed entry survived rescanning and reload, as did
+  the selected reading position at page 3. No browser console errors were observed.
+  Evidence: output/contents-repair-sample.png. Hamlet was tested directly through
+  PDF.js because browser file-upload permission was declined; no upload workaround
+  was used and the user's original shelf was not changed.
+- Unlabelled generic two-column lists without leaders or structural titles remain
+  conservative: alignment alone also describes numeric tables. General accuracy
+  on arbitrary PDFs is unmeasured. No OCR or semantic model was added.
+- Two bounded gpt-6.1-sol workers used high reasoning in disjoint lanes. Peak
+  staffing was three including root; token and cost totals are unavailable. A
+  single-agent repair would avoid coordination overhead, but independent detector
+  and compatibility review served this requested workflow. Savings are unmeasured.
 
 ## Rollback and handoff
 

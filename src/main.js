@@ -1,7 +1,7 @@
 import './styles.css';
 import { openPdf, extractPage, renderPdfPage, titleFromFilename } from './pdf-engine.js';
 import { STRUCTURE_VERSION, readDocumentStructure, analyzeDocumentStructure } from './document-structure.js';
-import { STRUCTURE_KINDS, structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner } from './structure-model.js';
+import { STRUCTURE_KINDS, shouldAutoScanStructure, structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner } from './structure-model.js';
 import { demo } from './demo.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
@@ -220,7 +220,7 @@ async function startStructureScan(fresh = false) {
 }
 function maybeScanStructure() {
   ensureStructure();
-  if (book.id !== 'demo' && !['complete', 'cancelled', 'manual'].includes(book.structure.status)) void startStructureScan();
+  if (book.id !== 'demo' && shouldAutoScanStructure(book.structure, STRUCTURE_VERSION)) void startStructureScan();
 }
 function structureStatus() {
   if (book.id === 'demo') return 'A short read to make yourself at home.';

@@ -1,6 +1,12 @@
 /** Navigation metadata is independent of the source-page reading layout. */
 export const STRUCTURE_KINDS = ['part', 'chapter', 'section', 'appendix', 'frontmatter', 'heading'];
 
+/** Explicit stop/manual choices take precedence over detector upgrades. */
+export function shouldAutoScanStructure(structure, version) {
+  if (['cancelled', 'manual'].includes(structure?.status)) return false;
+  return structure?.status !== 'complete' || structure.version !== version;
+}
+
 export function structureFromLegacy(chapters = [], totalPages = 1, manual = false) {
   return {
     version: 0, status: manual ? 'manual' : 'pending', totalPages,
@@ -28,6 +34,19 @@ export function structureNodes(structure, edits = {}, totalPages = structure?.to
   for (const [id, node] of byId) {
     const replacement = node.source !== 'manual' && manual.find(entry => entry.page === node.page && entry.kind === node.kind && entry.id !== id);
     if (replacement) { byId.delete(id); replacements.set(id, replacement.id); }
+  }
+  // An accepted suggestion can become a confident detection with a different
+  // ID. Retain the user's entry only when the same anchor matches uniquely.
+  const corrected = [...byId.values()].filter(node => node.source === 'manual');
+  const automatic = [...byId.values()].filter(node => node.source !== 'manual');
+  const titleKey = title => String(title ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  const sameAnchor = (a, b) => a.page === b.page && a.kind === b.kind && titleKey(a.title) === titleKey(b.title)
+    && (!Number.isFinite(a.y) || !Number.isFinite(b.y) || Math.abs(a.y - b.y) < 3);
+  for (const entry of corrected) {
+    const matches = automatic.filter(node => sameAnchor(entry, node));
+    if (matches.length !== 1 || corrected.filter(node => sameAnchor(node, matches[0])).length !== 1) continue;
+    const replacement = matches[0];
+    byId.delete(replacement.id); replacements.set(replacement.id, entry.id);
   }
   const nodes = [...byId.values()].filter(node =>
     typeof node.title === 'string' && node.title.trim() && Number.isInteger(node.page)

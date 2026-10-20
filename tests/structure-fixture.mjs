@@ -47,3 +47,40 @@ export function makeStructurePdf({ outline = true, pages = 132 } = {}) {
   output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return output;
 }
+
+/** Small original play: body-sized scenes, top-edge acts, counters and a mid-page opening. */
+export function makePlayPdf() {
+  const objects = [];
+  const add = (text) => objects.push(text);
+  const escape = (text) => text.replace(/[\\()]/g, '\\$&');
+  const pages = Array.from({ length: 4 }, () => []);
+  const text = (page, value, x, y, size = 17) => pages[page - 1].push(`BT /F1 ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escape(value)}) Tj ET`);
+  text(1, 'Contents', 260, 898, 21);
+  for (const [value, y] of [['ACT I', 780], ['Scene I', 740], ['Scene II', 720], ['ACT II', 660], ['Scene I', 620], ['Scene II', 600]]) text(1, value, 220, y);
+  const dialogue = (page, y) => {
+    for (let i = 0; i < 5; i++) {
+      text(page, 'TRAVELLER The road is long and we shall walk together.', 80, y - i * 20);
+      if (i === 4) text(page, '5', 600, y - i * 20);
+    }
+  };
+  for (const [page, act] of [[2, 'I'], [3, 'II']]) {
+    text(page, `ACT ${act}`, 265, 898, 21); text(page, 'Scene I', 268, 816);
+    text(page, 'Enter two travellers.', 180, 796); dialogue(page, 756);
+  }
+  text(2, 'Scene II', 268, 560); text(2, 'Enter a messenger.', 180, 540); dialogue(2, 500);
+  text(4, 'ACT II. SC. II', 450, 877, 11); dialogue(4, 816);
+  text(4, 'Scene II', 268, 600); text(4, 'Enter the travellers.', 180, 580); dialogue(4, 540);
+  add('<< /Type /Catalog /Pages 2 0 R >>');
+  add('<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R] /Count 4 >>');
+  add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  for (const [index, commands] of pages.entries()) {
+    const stream = commands.join('\n');
+    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 720 917] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + index * 2} 0 R >>`);
+    add(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+  }
+  let output = '%PDF-1.4\n'; const offsets = [0];
+  objects.forEach((value, index) => { offsets.push(Buffer.byteLength(output)); output += `${index + 1} 0 obj\n${value}\nendobj\n`; });
+  const xref = Buffer.byteLength(output);
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
+  return `${output}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+}

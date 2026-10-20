@@ -1,6 +1,81 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner } from '../src/structure-model.js';
+import { structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner, shouldAutoScanStructure } from '../src/structure-model.js';
+import { analyzeDocumentStructure, STRUCTURE_VERSION } from '../src/document-structure.js';
+
+test('automatic scan policy upgrades completed snapshots while respecting explicit opt-outs', () => {
+  assert.equal(shouldAutoScanStructure(undefined, 2), true);
+  assert.equal(shouldAutoScanStructure({ status: 'complete', version: 1 }, 2), true);
+  assert.equal(shouldAutoScanStructure({ status: 'complete', version: 2 }, 2), false);
+  assert.equal(shouldAutoScanStructure({ status: 'complete' }, 2), true);
+  for (const version of [1, 2]) {
+    for (const status of ['manual', 'cancelled']) assert.equal(shouldAutoScanStructure({ status, version }, 2), false);
+    for (const status of ['pending', 'scanning', 'error']) assert.equal(shouldAutoScanStructure({ status, version }, 2), true);
+  }
+});
+
+test('detector upgrades preserve existing IDs, corrections, accepted suggestions, and reading anchors', async () => {
+  const item = (str, y, size = 10) => ({ str, width: str.length * size * .5, transform: [size, 0, 0, size, 30, y], hasEOL: false });
+  const pdf = {
+    numPages: 4, getOutline: async () => [], getPageLabels: async () => null,
+    getPage: async n => ({ view: [0, 0, 600, 800], getTextContent: async () => ({ items:
+      n === 1 ? [item('Part I: Learning', 730, 24), item('Chapter 1: Start', 670, 20), item('Text.', 620)]
+        : n === 2 ? [item('1.1 Details', 720, 18), item('Text.', 670)]
+          : n === 3 ? [item('Chapter 2: Next', 720, 20), item('Text.', 670)]
+            : [item('Section 9: Optional', 650), item('Text.', 610)],
+    }) }),
+  };
+  // IDs recorded from the version-1 detector for this self-contained fixture.
+  const ids = { part: 'structure-nussij', first: 'structure-1swx11k', section: 'structure-1jzzr4j', second: 'structure-84x8t3', accepted: 'structure-hoeucl' };
+  const snapshot = await analyzeDocumentStructure(pdf);
+  assert.equal(snapshot.version, STRUCTURE_VERSION);
+  for (const id of [ids.part, ids.first, ids.section, ids.second]) assert.ok(snapshot.nodes.some(node => node.id === id), `preserves ${id}`);
+  assert.ok(snapshot.candidates.some(node => node.id === ids.accepted));
+  const book = {
+    structure: { ...snapshot, version: 1 },
+    structureEdits: {
+      [ids.first]: { ...snapshot.nodes.find(node => node.id === ids.first), title: 'My opening' },
+      [ids.second]: { hidden: true },
+      [ids.section]: { ...snapshot.nodes.find(node => node.id === ids.section), parentId: ids.part },
+      [ids.accepted]: { ...snapshot.candidates.find(node => node.id === ids.accepted), hidden: false },
+      custom: { title: 'My note', page: 4, kind: 'heading', parentId: ids.part },
+    },
+    bookPosition: { page: 2, offset: 845, contentsId: ids.section },
+    scrollPosition: { page: 2, fraction: .45, view: 'book' },
+  };
+  const saved = structuredClone(book);
+  book.structure = await analyzeDocumentStructure(pdf);
+  const result = structureNodes(book.structure, book.structureEdits);
+  assert.equal(result.find(node => node.id === ids.first).title, 'My opening');
+  assert.equal(result.some(node => node.id === ids.second), false);
+  assert.equal(result.find(node => node.id === ids.section).parentId, ids.part);
+  assert.equal(result.filter(node => node.id === ids.accepted).length, 1);
+  assert.equal(result.find(node => node.id === 'custom').parentId, ids.part);
+  assert.deepEqual(book.structureEdits, saved.structureEdits);
+  assert.deepEqual(book.bookPosition, saved.bookPosition);
+  assert.deepEqual(book.scrollPosition, saved.scrollPosition);
+  assert.equal(activeStructureNode(result, 2, book.bookPosition.contentsId).id, ids.section);
+});
+
+test('accepted suggestions retain their ID when a unique matching heading becomes confident', () => {
+  const automatic = { id: 'detected', title: 'Scene 1', page: 3, y: 700, kind: 'chapter', parentId: null, source: 'headings' };
+  const child = { id: 'child', title: 'A detail', page: 3, y: 650, kind: 'section', parentId: automatic.id, source: 'headings' };
+  const edits = { accepted: { ...automatic, id: 'accepted', confidence: 'low' } };
+  const result = structureNodes({ nodes: [automatic, child], totalPages: 4 }, edits);
+  assert.equal(result.some(node => node.id === 'detected'), false);
+  assert.equal(result.filter(node => node.title === 'Scene 1').length, 1);
+  assert.equal(result.find(node => node.id === 'child').parentId, 'accepted');
+  assert.equal(result.find(node => node.id === 'accepted').source, 'manual');
+});
+
+test('overlay reconciliation preserves distinct or ambiguous same-page scenes', () => {
+  const scene = { title: 'Scene 1', page: 3, kind: 'chapter', parentId: null, source: 'headings' };
+  const automatic = [{ ...scene, id: 'upper', y: 700 }, { ...scene, id: 'lower', y: 300 }];
+  const uncertain = structureNodes({ nodes: automatic, totalPages: 4 }, { accepted: { ...scene, y: null } });
+  assert.equal(uncertain.length, 3, 'a page-only correction cannot choose between two scene starts');
+  const positioned = structureNodes({ nodes: automatic, totalPages: 4 }, { accepted: { ...scene, y: 700 } });
+  assert.deepEqual(positioned.map(node => node.id), ['accepted', 'lower']);
+});
 
 const nodes = [
   { id: 'part', title: 'Part I', kind: 'part', page: 3, parentId: null },
