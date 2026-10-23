@@ -152,6 +152,34 @@ test('parses contents references contained in single text items', async () => {
   assert.ok(result.nodes.some((n) => n.page === 4 && n.source === 'toc' && n.title.includes('Return')));
 });
 
+test('numbered single-run contents rows corroborate their destination headings', async () => {
+  const doc = pdf({ count: 2, labels: ['1', '2'], pageText: n => n === 1 ? [
+    item('Contents', 40, 740, 20), item('1. Introduction ..... 2', 40, 700),
+  ] : [
+    item('1. Introduction', 40, 700, 16),
+    item('Ordinary prose follows this chapter heading and continues along the page.', 40, 675),
+  ] });
+  const result = await analyzeDocumentStructure(doc);
+  assert.ok(result.nodes.some(node => node.title === '1. Introduction' && node.page === 2 && node.source === 'toc'));
+  assert.equal(result.nodes.some(node => node.title === 'Entire book'), false);
+});
+
+for (const drift of [-0.2, 0.2]) test(`contents fields tolerate a ${drift}-point baseline difference`, async () => {
+  const doc = pdf({ count: 3, labels: ['1', '2', '3'], pageText: n => n === 1 ? [
+    item('Contents', 40, 740, 20),
+    item('Chapter 1: Introduction', 40, 700), item('2', 520, 700 + drift),
+    item('Chapter 2: Conclusion', 40, 680), item('3', 520, 680 - drift),
+  ] : [
+    item(n === 2 ? 'Chapter 1: Introduction' : 'Chapter 2: Conclusion', 40, 700),
+    item('Ordinary prose follows this chapter heading.', 40, 675),
+  ] });
+  const result = await analyzeDocumentStructure(doc);
+  assert.deepEqual(result.nodes.filter(node => node.source === 'toc').map(node => [node.title, node.page]), [
+    ['Chapter 1: Introduction', 2], ['Chapter 2: Conclusion', 3],
+  ]);
+  assert.equal(result._tocEvidence.length, 2);
+});
+
 test('repeated headers, contents, body mentions, and captions do not create structure nodes', async () => {
   const doc = pdf({ count: 5, pageText: (n) => {
     if (n === 1) return [item('Contents', 30, 760, 18), item('Chapter 1 .... 3', 30, 720)];

@@ -1,5 +1,11 @@
 # Contents detection repair
 
+> October 22 update: manual Contents editing, suggestion actions and overlays were
+> removed. Automatic Contents, scan controls, bookmarks and source anchors remain.
+> Old custom-only arrangements rescan automatically; retired edit metadata is
+> discarded at the storage boundary. Earlier compatibility notes below describe
+> the previous implementation.
+
 Status: implemented locally and verified on 2026-10-19. No commit or publication
 was requested for this repair.
 

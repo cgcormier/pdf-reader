@@ -153,7 +153,7 @@ test('the analyzer discards all stale checkpoint evidence and rescans every page
     _tocEvidence: [{ title: 'Poison', label: '999', tocPage: 1 }], _baseCandidates: [{ id: 'poison', title: 'Poison', evidence: [] }] };
   const result = await analyzeDocumentStructure(doc, { initial: stale });
   assert.deepEqual(fetched, [1, 2]);
-  assert.equal(result.version, 2);
+  assert.equal(result.version, STRUCTURE_VERSION);
   assert.equal(result.textPages, 2);
   assert.equal(result._tocEvidence.length, 0);
   assert.ok([...result.nodes, ...result.candidates].every((node) => !/poison/i.test(node.title)));

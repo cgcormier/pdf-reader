@@ -25,7 +25,7 @@
       const fixture = {
         id: 'contents-layout-fixture', title: 'math textbook', filename: 'sample.pdf',
         bytes, page: 1, bookmarks: [], addedAt: Date.now(), source: 'structure',
-        chapters: [{ title: nodes[0].title, page: 1 }], structureEdits: {}, contentsExpanded: {},
+        chapters: [{ title: nodes[0].title, page: 1 }], contentsExpanded: {},
         structure: { version: STRUCTURE_VERSION, status: 'complete', totalPages,
           nodes, scannedPages: Array.from({ length: totalPages }, (_, index) => index + 1),
           failedPages: [], textPages: totalPages, tocUnresolved: 25,
@@ -43,7 +43,7 @@
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.locator('#chapter-list .chapter-link').nth(15).waitFor({ state: 'attached' });
     const checkHeight = async (label) => {
-      console.log(await snapshot({ locator: page.locator('#book-contents'), search: /Contents|Review suggestions/ }));
+      console.log(await snapshot({ locator: page.locator('#book-contents'), search: /Contents|Scan PDF/ }));
       const box = await page.locator('#chapter-list').boundingBox();
       if (!box || box.height < 86) throw new Error(`${label}: Contents collapsed to ${box?.height}px`);
       console.log(`${label}: Contents height ${Math.round(box.height)}px`);

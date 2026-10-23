@@ -1,4 +1,6 @@
-export const STRUCTURE_VERSION = 2;
+import { readPageLayout } from './pdf-layout-adapter.js';
+import { structureLines } from './pdf-layout.js';
+export const STRUCTURE_VERSION = 5;
 
 const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
@@ -124,51 +126,6 @@ async function firstDescendantAnchor(pdf, items, signal) {
   return null;
 }
 
-function itemGeometry(item) {
-  const t = item?.transform ?? [];
-  const x = Number(t[4]) || 0; const y = Number(t[5]) || 0;
-  const sx = Math.hypot(Number(t[0]) || 0, Number(t[1]) || 0);
-  const sy = Math.hypot(Number(t[2]) || 0, Number(t[3]) || 0);
-  const angle = Math.atan2(Number(t[1]) || 0, Number(t[0]) || 0);
-  return { x, y, size: Math.max(1, sx, sy), angle, width: Math.max(0, Number(item?.width) || String(item?.str ?? '').length * Math.max(1, sx) * .45) };
-}
-function pageLines(content) {
-  const items = (content?.items ?? []).filter((i) => typeof i?.str === 'string' && clean(i.str));
-  // Group by baseline and orientation, then split a line at a wide column gap.
-  const lines = [];
-  for (const item of items) {
-    const g = itemGeometry(item);
-    let line = lines.find((l) => Math.abs(l.angle - g.angle) < .08 && Math.abs(l.y - g.y) <= Math.max(2, g.size * .22));
-    if (!line) lines.push(line = { angle: g.angle, y: g.y, entries: [] });
-    line.entries.push({ item, g });
-  }
-  const splitLines = [];
-  for (const line of lines) {
-    const ordered = line.entries.sort((a, b) => a.g.x - b.g.x);
-    const fullEntries = ordered.map(({ item, g }) => ({ text: clean(item.str), x: g.x, right: g.x + g.width, size: g.size })).filter((e) => e.text);
-    const fullText = fullEntries.map((e) => e.text).join(' ');
-    let group = [];
-    for (const entry of ordered) {
-      const previous = group.at(-1);
-      if (previous && entry.g.x - (previous.g.x + previous.g.width) > Math.max(110, entry.g.size * 8)) {
-        splitLines.push({ ...line, entries: group, fullText, fullEntries }); group = [];
-      }
-      group.push(entry);
-    }
-    if (group.length) splitLines.push({ ...line, entries: group, fullText, fullEntries });
-  }
-  return splitLines.map((line) => {
-    const entries = line.entries;
-    let text = ''; let right = null;
-    for (const { item, g } of entries) {
-      const part = clean(item.str); if (!part) continue;
-      if (text && (right == null || g.x - right > g.size * .2 || item.hasEOL)) text += ' ';
-      text += part;
-      right = item.hasEOL ? null : g.x + g.width;
-    }
-    return { text: clean(text), fullText: clean(line.fullText), fullEntries: line.fullEntries, y: line.y, size: Math.max(...entries.map((e) => e.g.size)), x: Math.min(...entries.map((e) => e.g.x)), right: Math.max(...entries.map((e) => e.g.x + e.g.width)) };
-  }).filter((l) => l.text).sort((a, b) => b.y - a.y || a.x - b.x);
-}
 function romanNumber(text) {
   const s = String(text).toUpperCase();
   if (!/^(?=[MDCLXVI]+$)M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$/.test(s)) return null;
@@ -293,13 +250,15 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
     checkAbort(signal);
     if (!scanned.has(pageNumber)) {
       try {
-        const page = await waitAbort(pdf.getPage(pageNumber), signal);
-        const content = await waitAbort(page.getTextContent(), signal);
+        const layout = await readPageLayout(pdf, pageNumber, { signal });
+        const page = { view: layout.view };
         checkAbort(signal);
-        const lines = pageLines(content);
+        const lines = structureLines(layout);
         if (lines.length) state.textPages += 1;
         failed.delete(pageNumber);
-        const toc = tocPageEvidence(lines, page.view);
+        // Numbered TOC rows can look like body lists; their page-reference
+        // evidence is independent of eligibility as standalone headings.
+        const toc = tocPageEvidence(lines.filter(line => line.tocEligible !== false), page.view);
         const tocRows = new Set(toc.entries.map(({ line }) => line.fullEntries));
         for (const { line, parsed } of toc.entries) {
           const evidence = { title: parsed.title, label: parsed.label, tocPage: pageNumber, tocY: line.y };
@@ -312,6 +271,7 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
           for (let i = 0; i < lines.length; i++) {
             if (consumedTitleLines.has(i)) continue;
             const line = lines[i];
+            if (line.contentsEligible === false) continue;
             if (tocRows.has(line.fullEntries)) continue;
             // A separate opening below the last Contents row may share its page.
             if (toc.labelled && (toc.bottom == null || line.y >= toc.bottom)) continue;
@@ -325,7 +285,7 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
               const inMargin = looksRunning(line, page.view);
               if (!inMargin || (play.family === 'act' && spatial && below >= line.size * 2 && line.y > page.view[3] - (page.view[3] - page.view[1]) * .055)) {
                 const evidence = { title: play.title, page: pageNumber, y: line.y, size: line.size, median: bodyMedian,
-                  style: `play:${play.family}:${Math.round(line.size / Math.max(1, bodyMedian) * 10) / 10}:${Math.round(line.x / 25)}`,
+                  style: `play:${play.family}:${Math.round(line.size * 10) / 10}:${Math.round(line.x / 25)}`,
                   explicit: true, play: { ...play, spatial }, evidence: ['Standalone numbered play heading', ...(spatial ? ['Whitespace separates the heading from surrounding text'] : [])] };
                 if (!state._headingEvidence.some((h) => h.page === pageNumber && titleKey(h.title) === titleKey(play.title) && Math.abs(h.y - line.y) < 2)) state._headingEvidence.push(evidence);
               }

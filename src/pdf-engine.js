@@ -1,3 +1,5 @@
+import { readPageLayout } from './pdf-layout-adapter.js';
+import { structureLines } from './pdf-layout.js';
 const MAX_HEADING_SCAN_PAGES = 120;
 
 function abortError() {
@@ -234,15 +236,37 @@ function splitParagraphs(lines) {
   return paragraphs;
 }
 
-/** Extract visible text into plain strings; callers should render these as text. */
-export async function extractPage(pdf, pageNumber) {
+/** Shared layout plus compatibility strings and a mapped legacy projection. */
+export async function extractPage(pdf, pageNumber, { signal } = {}) {
   if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pdf.numPages) {
     throw new RangeError(`Page number must be between 1 and ${pdf.numPages}.`);
   }
-  const page = await pdf.getPage(pageNumber);
-  const content = await page.getTextContent();
-  const paragraphs = splitParagraphs(textLinesForPage(content, pageNumber, page.view));
-  return { paragraphs, hasText: paragraphs.length > 0 };
+  const layout = await readPageLayout(pdf, pageNumber, { signal });
+  const content = { items: layout.runs.map(run => ({ str: run.text, width: run.width, transform: run.transform, hasEOL: run.hasEOL, sourceIndex: run.index })) };
+  // Retain the old projection solely for saved-position migration. It must use
+  // the old ordering, footer filter, whitespace and paragraph separators.
+  const legacyLines = textLinesForPage(content, pageNumber, layout.view);
+  const legacyText = splitParagraphs(legacyLines).join('\n\n');
+  let cursor = 0; const segments = [];
+  for (const line of legacyLines) for (const item of line.items) {
+    const part = item.str.trim(); if (!part) continue;
+    const normalized = part.replace(/\s+/g, ' ');
+    const start = legacyText.indexOf(normalized, cursor);
+    if (start < 0) continue;
+    let displayOffset = 0;
+    for (const match of part.matchAll(/\s+|\S+/gu)) {
+      const whitespace = /^\s/u.test(match[0]); const value = whitespace ? ' ' : match[0];
+      const sourceStart = item.str.indexOf(part) + match.index;
+      segments.push({ start: start + displayOffset, end: start + displayOffset + value.length,
+        source: { item: item.sourceIndex, start: sourceStart, end: sourceStart + match[0].length },
+        transform: whitespace && match[0] !== ' ' ? 'Legacy whitespace' : null });
+      displayOffset += value.length;
+    }
+    cursor = start + normalized.length;
+  }
+  return { paragraphs: layout.blocks.map(block => layout.projection.text.slice(block.start, block.end)),
+    hasText: layout.projection.text.length > 0 || layout.annotations.length > 0, layout,
+    legacy: { text: legacyText, segments, omitted: [] } };
 }
 
 function headingMatch(text) {
@@ -302,9 +326,9 @@ async function detectHeadings(pdf, onProgress, signal) {
   for (let pageNumber = 1; pageNumber <= scannedPages; pageNumber += 1) {
     throwIfAborted(signal);
     onProgress?.(pageNumber, scannedPages);
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const lines = textLinesForPage(content, pageNumber, page.view);
+    const layout = await readPageLayout(pdf, pageNumber, { signal });
+    const page = { view: layout.view };
+    const lines = structureLines(layout);
     if (likelyContentsPage(lines)) continue;
     const sizes = lines.map((line) => line.size).filter(Number.isFinite).sort((a, b) => a - b);
     const median = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 10;
