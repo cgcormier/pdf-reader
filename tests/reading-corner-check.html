@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Reading corner checks</title>
+<style>body{margin:16px;font:14px system-ui}iframe{display:block;border:1px solid #aaa;margin-top:16px}pre{white-space:pre-wrap}</style>
+<h1>Reading corner checks</h1>
+<p>Run on port 4187 only; checks write a fixture book and preferences to that test origin.</p>
+<button id="run">Run checks</button>
+<pre id="result" role="status">Ready</pre>
+<iframe title="Folio under test" width="1100" height="900"></iframe>
+<script type="module">
+import { putBook, savePreference } from '../src/storage.js';
+const frame = document.querySelector('iframe');
+const result = document.querySelector('#result');
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const until = async (predicate, message) => {
+  const deadline = performance.now() + 15000;
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error(`Timed out: ${message}`);
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+};
+const load = async (width, height, layout) => {
+  frame.width = width; frame.height = height;
+  savePreference('reading-layout', layout);
+  savePreference('active-book', 'demo');
+  await new Promise(resolve => { frame.onload = resolve; frame.src = '/'; });
+  await until(() => frame.contentDocument.querySelector('#shelf-spines')?.children.length === 8, 'app startup');
+};
+document.querySelector('#run').onclick = async () => {
+  result.textContent = 'Running';
+  try {
+    const passed = [];
+    assert(location.port === '4187', 'Use dedicated test origin :4187 to protect the normal shelf');
+    for (const [width, height, layout] of [[1100,900,'pages'], [1100,650,'scroll'], [390,844,'pages'], [390,650,'scroll'], [320,700,'pages']]) {
+      await load(width, height, layout);
+      const doc = frame.contentDocument;
+      const win = frame.contentWindow;
+      const corner = doc.querySelector('#drop-zone');
+      const image = corner.querySelector('img');
+      await image.decode();
+      if (width <= 820) {
+        doc.querySelector('#contents-toggle').click();
+        await until(() => Math.abs(doc.querySelector('#book-contents').getBoundingClientRect().left) < 1, 'drawer transition');
+      }
+      assert(image.naturalWidth > 0, 'Book cutout failed to load');
+      assert(corner.getAttribute('aria-label').includes('browse'), 'Upload control needs an accessible name');
+      assert(doc.documentElement.scrollWidth <= width, 'Page overflows horizontally');
+      const art = image.getBoundingClientRect();
+      const box = corner.getBoundingClientRect();
+      assert(Math.abs(art.width / art.height - image.naturalWidth / image.naturalHeight) < .01, 'Books are distorted');
+      assert(art.width <= box.width, 'Artwork exceeds upload width');
+      assert(Math.abs(box.left) <= 1, `${width}px: stack is inset from page edge (${box.left})`);
+      assert(Math.abs(art.left - box.left) <= 1, 'Artwork is inset inside its corner');
+      assert(Math.abs((art.top + art.height * 1646 / 1672) - box.bottom) <= 1, 'Painted books do not meet corner bottom');
+      const panel = doc.querySelector('#book-contents');
+      panel.scrollTop = panel.scrollHeight;
+      const panelBox = panel.getBoundingClientRect();
+      assert(Math.abs(corner.getBoundingClientRect().bottom - panelBox.bottom) <= 1, 'Upload zone does not reach sidebar bottom');
+      assert(!doc.querySelector('.app-footer'), 'Footer bar remains');
+      assert(!doc.querySelector('.contents-panel .eyebrow'), 'Reading room label remains');
+      assert(win.getComputedStyle(doc.querySelector('#chapter-note')).display === 'none', 'Sample note remains visible');
+      const label = doc.querySelector('#library-button');
+      const shelf = doc.querySelector('#shelf-spines').getBoundingClientRect();
+      const labelBox = label.getBoundingClientRect();
+      const header = doc.querySelector('.app-header').getBoundingClientRect();
+      assert(label.textContent.includes('Your PDFs,'), 'Shelf invitation changed');
+      assert(labelBox.right < shelf.left + 1, 'Shelf invitation is not left of the books');
+      const artwork = doc.querySelector('.shelf-art').getBoundingClientRect();
+      assert(Math.abs(artwork.width / artwork.height - 144 / 54) < .01, 'Shelf illustration is stretched');
+      const stand = doc.querySelector('.shelf-stand').getBoundingClientRect();
+      assert(Math.abs(stand.width / stand.height - 12) < .01, 'Shelf board is stretched');
+      const shelfHit = doc.elementFromPoint(artwork.right - 3, artwork.bottom - 5);
+      assert(shelfHit === label, 'Clicking the shelf board must open the library');
+      assert(shelf.top >= header.top && shelf.bottom <= header.bottom, 'Shelf exceeds header');
+      for (const cover of doc.querySelectorAll('.shelf-spine-cover')) assert(cover.getBoundingClientRect().top >= header.top, 'Book exceeds header');
+      doc.querySelector('#launch-help').click();
+      assert(doc.querySelector('#modal').open && doc.querySelector('#modal-title').textContent === 'Your own reading corner', 'Reading-corner help was lost');
+      doc.querySelector('#modal-close').click();
+      shelfHit.click();
+      await until(() => doc.querySelector('#modal').open, 'shelf dialog');
+      assert(doc.querySelector('#modal-title').textContent === 'Your shelf', 'Shelf access was lost');
+      doc.querySelector('#modal-close').click();
+      let opened = 0;
+      doc.querySelector('#file-input').addEventListener('click', event => { event.preventDefault(); opened++; });
+      corner.click();
+      assert(opened === 1, 'Corner does not open the existing file input');
+      const transfer = new win.DataTransfer();
+      transfer.items.add(new win.File(['invalid'], 'corner-check.txt', {type:'text/plain'}));
+      doc.dispatchEvent(new win.DragEvent('dragover', {bubbles:true, cancelable:true, dataTransfer:transfer}));
+      assert(corner.classList.contains('drag-over'), 'Drop feedback missing');
+      doc.dispatchEvent(new win.DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer:transfer}));
+      assert(!corner.classList.contains('drag-over'), 'Drop feedback did not clear');
+      assert(doc.querySelector('#toast').textContent.includes('Choose a PDF'), 'Existing file validation is disconnected');
+      passed.push(`${width}x${height} ${layout}: flush corner, clean copy, header shelf, help, browse, drag and validation passed`);
+      result.textContent = passed.join('\n');
+    }
+    savePreference('reading-layout', 'pages');
+    const bytes = await fetch('/sample.pdf').then(response => response.arrayBuffer());
+    await putBook({id:'corner-ui-fixture', title:'Corner shelf fixture', author:'UI regression', bytes, page:1, bookmarks:[], chapters:[{title:'Beginning',page:1}], added:Date.now()});
+    await load(1100, 900, 'pages');
+    let doc = frame.contentDocument;
+    const spine = doc.querySelector('button.shelf-spine[aria-label="Read Corner shelf fixture"]');
+    assert(spine && spine.getAttribute('aria-describedby'), 'Saved spine lost its accessible tooltip');
+    spine.focus();
+    await until(() => frame.contentWindow.getComputedStyle(spine.querySelector('[role="tooltip"]')).visibility === 'visible', 'keyboard tooltip');
+    assert(doc.activeElement === spine, 'Saved spine cannot receive keyboard focus');
+    const spineBox = spine.getBoundingClientRect();
+    const bookHit = doc.elementFromPoint(spineBox.left + spineBox.width / 2, spineBox.bottom - 5);
+    assert(bookHit?.closest('button.shelf-spine') === spine, 'Library hit area covers saved-book button');
+    spine.click();
+    await until(() => doc.querySelector('#book-title').textContent === 'Corner shelf fixture' && !doc.querySelector('#modal').open, 'spine opens saved PDF');
+    assert(frame.contentWindow.getComputedStyle(doc.querySelector('#chapter-note')).display !== 'none', 'PDF scan status was hidden');
+    passed.push('Saved book: keyboard tooltip, spine loading and PDF scan status passed');
+    result.textContent = passed.join('\n');
+  } catch (error) { result.textContent = `FAIL: ${error.message}`; }
+};
+</script>
+</html>
