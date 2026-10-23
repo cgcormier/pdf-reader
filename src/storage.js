@@ -50,14 +50,26 @@ async function transaction(getDatabase, storeName, mode, operation) {
 const booksTransaction = (mode, operation) => transaction(database, 'books', mode, operation);
 const placesTransaction = (mode, operation) => transaction(placesDatabase, 'places', mode, operation);
 
+// Retired metadata is discarded at the storage boundary, never applied to the
+// automatic tree. Existing source bytes and reading-place fields stay intact.
+function currentRecord(record) {
+  const { structureEdits: retiredEdits, ...value } = record;
+  if (value.source === 'manual' || value.structure?.status === 'manual') {
+    value.source = 'structure';
+    value.structure = undefined;
+    value.chapters = [{ title: 'Entire book', page: 1 }];
+  }
+  return value;
+}
+
 export async function getBook(id) {
   const [book, place] = await Promise.all([
     booksTransaction('readonly', store => store.get(id)),
     placesTransaction('readonly', store => store.get(id)),
   ]);
-  return book ? { ...book, ...place } : undefined;
+  return book ? currentRecord({ ...book, ...place }) : undefined;
 }
-export const putBook = book => booksTransaction('readwrite', store => store.put(book));
+export const putBook = book => booksTransaction('readwrite', store => store.put(currentRecord(book)));
 export async function deleteBook(id) {
   await Promise.all([
     booksTransaction('readwrite', store => store.delete(id)),
@@ -76,7 +88,7 @@ export async function listBooks() {
       const cursor = request.result;
       if (!cursor) return;
       const { bytes, ...metadata } = cursor.value;
-      books.push({ ...metadata, ...byId.get(metadata.id) });
+      books.push(currentRecord({ ...metadata, ...byId.get(metadata.id) }));
       cursor.continue();
     };
     tx.oncomplete = () => resolve(books.sort((a, b) => b.addedAt - a.addedAt));
@@ -87,7 +99,7 @@ export async function listBooks() {
 export async function updateBook(id, changes) {
   const allowed = new Set([
     'page', 'bookmarks', 'chapters', 'source', 'scrollPosition', 'bookPosition',
-    'structure', 'structureEdits', 'contentsExpanded', 'scannedPages',
+    'structure', 'contentsExpanded', 'scannedPages',
   ]);
   const metadata = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));
   const db = await placesDatabase();
@@ -97,7 +109,7 @@ export async function updateBook(id, changes) {
     const store = tx.objectStore('places');
     const request = store.get(id);
     request.onsuccess = () => {
-      store.put({ ...request.result, ...metadata, id });
+      store.put(currentRecord({ ...request.result, ...metadata, id }));
     };
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);

@@ -66,7 +66,7 @@ globalThis.indexedDB = {
     return request;
   },
 };
-const original = { id: 'older-book', title: 'An existing book', bytes: new Uint8Array([1, 2, 3]).buffer, page: 3, bookmarks: [3], chapters: [{ title: 'A Quiet Morning', page: 1 }], source: 'manual', addedAt: 1 };
+const original = { id: 'older-book', title: 'An existing book', bytes: new Uint8Array([1, 2, 3]).buffer, page: 3, bookmarks: [3], chapters: [{ title: 'A Quiet Morning', page: 1 }], source: 'structure', addedAt: 1 };
 
 test('existing shelf records remain readable before a progress overlay exists', async () => {
   await putBook(original);
@@ -74,7 +74,7 @@ test('existing shelf records remain readable before a progress overlay exists', 
   assert.equal((await listBooks())[0].chapters[0].title, 'A Quiet Morning');
 });
 
-test('progress updates touch only small metadata and retain PDF bytes and older chapter edits', async () => {
+test('progress updates touch only small metadata and retain PDF bytes and saved automatic chapters', async () => {
   const start = operations.length;
   const scrollPosition = { page: 4, fraction: 0.35, view: 'book' };
   const bookPosition = { page: 4, offset: 845 };
@@ -106,14 +106,9 @@ test('structure metadata round trips and survives later progress saves without c
       { id: 'chapter-1', kind: 'chapter', title: 'Opening', page: 2, parentId: 'part-1' },
     ],
   };
-  const structureEdits = {
-    'chapter-1': { title: 'A New Opening' },
-    'section-added': { title: 'Section 1.1', page: 3, parentId: 'chapter-1', kind: 'section' },
-  };
   const contentsExpanded = { 'part-1': true, 'chapter-1': false };
   await updateBook(original.id, {
     structure,
-    structureEdits,
     contentsExpanded,
     scannedPages: 120,
     source: 'headings',
@@ -121,7 +116,6 @@ test('structure metadata round trips and survives later progress saves without c
 
   let loaded = await getBook(original.id);
   assert.deepEqual(loaded.structure, structure);
-  assert.deepEqual(loaded.structureEdits, structureEdits);
   assert.deepEqual(loaded.contentsExpanded, contentsExpanded);
   assert.equal(loaded.scannedPages, 120);
   assert.equal(loaded.source, 'headings');
@@ -130,7 +124,6 @@ test('structure metadata round trips and survives later progress saves without c
   await updateBook(original.id, { page: 5 });
   loaded = await getBook(original.id);
   assert.deepEqual(loaded.structure, structure);
-  assert.deepEqual(loaded.structureEdits, structureEdits);
   assert.deepEqual(loaded.contentsExpanded, contentsExpanded);
   assert.equal(loaded.scannedPages, 120);
   assert.equal(loaded.page, 5);
@@ -147,4 +140,29 @@ test('later bookmark updates preserve the scroll place, and removal clears both 
   assert.equal(await getBook(original.id), undefined);
   assert.deepEqual(await listBooks(), []);
   assert.equal(databases.get('folio-reading-places').stores.get('places').has(original.id), false);
+});
+
+test('versioned source anchors and rollback metadata round trip without touching PDF bytes', async () => {
+  const id = 'mapped-layout-book'; await putBook({ ...original, id });
+  const bookPosition = { page: 3, offset: 21, layoutVersion: 1, source: { item: 7, offset: 4 }, legacyOffset: 35, contentsId: 'scene-2' };
+  const start = operations.length;
+  await updateBook(id, { bookPosition, scrollPosition: { page: 3, fraction: .4, view: 'book' } });
+  assert.ok(operations.slice(start).every(op => op.name === 'folio-reading-places'));
+  const saved = await getBook(id); assert.deepEqual(saved.bookPosition, bookPosition); assert.deepEqual(saved.bytes, original.bytes);
+  await deleteBook(id);
+});
+
+ test('retired edits are ignored and older custom-only books rescan without changing bytes or positions', async () => {
+  const id='retired-contents-book';
+  const raw={...original,id,source:'manual',structure:{status:'manual',nodes:[{id:'old',title:'Custom',page:1}]},structureEdits:{old:{title:'Override'}}};
+  databases.get('folio-library').stores.get('books').set(id,structuredClone(raw));
+  const loaded=await getBook(id);
+  assert.equal('structureEdits' in loaded,false); assert.equal(loaded.structure,undefined);
+  assert.deepEqual(loaded.chapters,[{title:'Entire book',page:1}]);
+  assert.deepEqual(loaded.bytes,original.bytes); assert.equal(loaded.page,original.page);
+  await updateBook(id,{page:4,structureEdits:{old:{title:'Still ignored'}}});
+  assert.equal('structureEdits' in databases.get('folio-reading-places').stores.get('places').get(id),false);
+  assert.deepEqual((await getBook(id)).bytes,original.bytes);
+  assert.equal('structureEdits' in (await listBooks()).find(b=>b.id===id),false);
+  await deleteBook(id);
 });

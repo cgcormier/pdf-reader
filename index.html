@@ -7,6 +7,8 @@
   <meta name="description" content="Your PDFs, with a little more room to breathe. A private, local reading room.">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/src/reading-corner.css">
+  <link rel="stylesheet" href="/src/header-shelf.css">
   <title>Folio — a little room for reading</title>
   <script>if (location.protocol === 'file:') document.documentElement.classList.add('file-launch');</script>
   <style>
@@ -27,9 +29,11 @@
     <span class="header-motto">Good books. A little quiet.</span>
     <div class="header-actions">
       <div class="shelf-shortcut" role="group" aria-label="Your bookshelf">
-        <div id="shelf-spines" class="shelf-spines" aria-label="Books on your shelf"></div>
-        <svg class="shelf-stand" viewBox="0 0 100 18" aria-hidden="true"><path d="M2 2h96v5H2zM14 7v9h5V7m62 0v9h5V7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-        <button id="library-button" class="quiet-button shelf-caption" type="button" aria-label="View your shelf">View your shelf <span id="shelf-count" class="count">0</span></button>
+        <div class="shelf-art" aria-label="Books on your shelf">
+          <div id="shelf-spines" class="shelf-spines"></div>
+          <svg class="shelf-stand" viewBox="0 0 144 12" aria-hidden="true"><path d="M3 2h138v3H3zM18 5v5h5V5m98 0v5h5V5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        </div>
+        <button id="library-button" class="quiet-button shelf-caption" type="button" aria-label="View your shelf"><span class="shelf-invitation-line">Your PDFs,</span><span class="shelf-invitation-line">stored on</span><span class="shelf-invitation-line">a shelf</span><span id="shelf-count" class="count">0</span></button>
       </div>
       <button id="import-button" class="primary-button" type="button"><span aria-hidden="true">＋</span> Open a PDF</button>
     </div>
@@ -37,13 +41,17 @@
   </header>
   <main class="workspace">
     <aside id="book-contents" class="contents-panel" aria-label="Book contents">
-      <div class="eyebrow">YOUR READING ROOM</div><button id="contents-close" class="icon-button contents-close" type="button" aria-label="Close contents">×</button>
+      <button id="contents-close" class="icon-button contents-close" type="button" aria-label="Close contents">×</button>
       <div class="book-meta"><div id="book-type" class="small-label">A FOLIO ORIGINAL</div><h1 id="book-title">The Art of Noticing</h1><p id="book-author">A small guide to being here</p></div>
-      <div class="contents-heading"><h2>Contents</h2><button id="edit-chapters" class="text-button" type="button">Edit</button></div>
+      <div class="contents-heading"><h2>Contents</h2></div>
       <nav id="chapter-list" aria-label="Chapters"></nav>
       <p id="chapter-note" class="chapter-note"></p>
-      <button id="drop-zone" class="drop-zone" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 15v5h16v-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Make yourself at home</span><small>Drop a PDF here, or browse</small></button>
       <div class="privacy-note"><span class="status-dot" aria-hidden="true"></span> Kept here, on your own shelf.</div>
+      <button id="launch-help" class="text-button" type="button">Make yourself a reading corner <span aria-hidden="true">↗</span></button>
+      <button id="drop-zone" class="drop-zone reading-corner" type="button" aria-label="Drop your PDF here, or browse for a PDF">
+        <img class="reading-corner-books" src="/images/reading-corner-books.png" alt="" width="941" height="1672">
+        <span class="reading-corner-copy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 15v5h16v-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Drop your<br>PDF here</span><small>or browse</small></span>
+      </button>
     </aside>
     <section class="reader-panel" aria-label="Reader">
       <div class="reader-toolbar"><button id="contents-toggle" class="quiet-button mobile-contents" type="button" aria-expanded="false" aria-controls="book-contents">Contents</button><div class="view-switch" role="group" aria-label="Reading view"><button id="book-view" class="view-button active" type="button" aria-pressed="true">Book view</button><button id="original-view" class="view-button" type="button" aria-pressed="false">Original PDF</button></div><div class="reading-layout-switch" role="group" aria-label="Reading layout"><button id="pages-layout" class="layout-button active" type="button" aria-pressed="true" title="Smooth book page turns (S)">Page flip</button><button id="scroll-layout" class="layout-button" type="button" aria-pressed="false" title="Continuous scroll (S)">Scroll</button></div><div class="reading-tools"><button id="appearance-button" class="quiet-button type-button text-size-scrubber" type="button" aria-label="Book text size. Drag horizontally to adjust." title="Book text size · Drag left or right">Aa</button><div id="text-size-ruler" class="toolbar-text-size-ruler" aria-hidden="true" hidden><span id="text-size-ruler-value" class="text-size-ruler-value">17px</span><div class="text-size-ruler-track"><span id="text-size-ruler-marker" class="text-size-ruler-marker"></span></div><div class="text-size-ruler-bounds"><span>6px</span><span>23px</span></div></div><button id="paper-button" class="icon-button" type="button" aria-label="Toggle paper appearance" title="Toggle paper appearance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5 8.4 8.4 0 1 0 20.5 14.2Z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button><button id="bookmark-button" class="icon-button" type="button" aria-label="Bookmark this page" title="Bookmark this page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4V4Z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button><button id="focus-button" class="icon-button" type="button" aria-label="Enter focus mode" title="Focus mode (F)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></div></div>
@@ -54,7 +62,6 @@
       <div class="reader-hint"><span id="navigation-hint">Scroll at your own pace · S to switch</span><span class="hint-divider">·</span><span id="save-status">Your place is kept, automatically.</span></div>
     </section>
   </main>
-  <footer class="app-footer"><span>A PLACE TO SLOW DOWN.</span><button id="launch-help" class="text-button" type="button">Make yourself a reading corner <span aria-hidden="true">↗</span></button></footer>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="modal" class="modal" aria-labelledby="modal-title"><div class="modal-heading"><h2 id="modal-title"></h2><button id="modal-close" class="icon-button" type="button" aria-label="Close dialog">×</button></div><div id="modal-body"></div></dialog>
   <script type="module" src="/src/main.js"></script>

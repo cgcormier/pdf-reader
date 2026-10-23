@@ -186,11 +186,13 @@ test('extractPage orders text by page position, rebuilds paragraphs, and handles
       textItem('1', 300, 20),
     ] } : { items: [] },
   });
-  assert.deepEqual(await extractPage(pdf, 1), {
-    paragraphs: ['first second continued', 'new paragraph'],
-    hasText: true,
-  });
-  assert.deepEqual(await extractPage(pdf, 2), { paragraphs: [], hasText: false });
+  const first = await extractPage(pdf, 1);
+  assert.deepEqual(first.paragraphs, ['first second continued', 'new paragraph']);
+  assert.equal(first.hasText, true);
+  assert.equal(first.layout.annotations[0].projection.text, '1');
+  const second = await extractPage(pdf, 2);
+  assert.deepEqual(second.paragraphs, []);
+  assert.equal(second.hasText, false);
   await assert.rejects(extractPage(pdf, 0), RangeError);
 });
 

@@ -5,10 +5,10 @@ export async function verifyShelfShortcut(tab) {
     count: Number(root.querySelector('#shelf-count').textContent),
     books: root.querySelectorAll('button.shelf-spine').length,
     label: root.querySelector('#library-button').textContent.trim(),
-    captionSize: Number(getComputedStyle(root.querySelector('#library-button')).fontSize.replace('px', '')),
+    invitationAtLeft: root.querySelector('#library-button').getBoundingClientRect().right <= root.querySelector('#shelf-spines').getBoundingClientRect().left,
   }));
   if (state.books !== Math.min(state.count, 8)) throw new Error('Shelf previews do not match the collection');
-  if (!state.label.startsWith('View your shelf') || state.captionSize > 10) throw new Error('Shelf caption changed');
+  if (!state.label.includes('Your PDFs,') || !state.invitationAtLeft) throw new Error('Shelf invitation must sit to the left of the books');
   for (const spine of await tab.playwright.locator('button.shelf-spine').all()) {
     await spine.press('Tab');
     await tab.pressKey(null, 'shift+Tab');

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { readDocumentStructure, analyzeDocumentStructure } from '../src/document-structure.js';
-import { makeStructurePdf } from './structure-fixture.mjs';
+import { makeStructurePdf, makePlayPdf } from './structure-fixture.mjs';
 
 for (const outline of [true, false]) {
   test(`real PDF.js handles a 132-page book (${outline ? 'partial nested outline' : 'printed contents only'})`, async () => {
@@ -36,3 +37,46 @@ for (const outline of [true, false]) {
     } finally { await task.destroy(); }
   });
 }
+
+test('real PDF.js detects an original play without a local download or outline', async () => {
+  const task = getDocument({ data: new Uint8Array(Buffer.from(makePlayPdf())), isEvalSupported: false,
+    standardFontDataUrl: fileURLToPath(new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url)).replaceAll('\\', '/') });
+  try {
+    const result = await analyzeDocumentStructure(await task.promise);
+    const acts = result.nodes.filter((node) => /^Act /.test(node.title));
+    const scenes = result.nodes.filter((node) => /^Scene /.test(node.title));
+    assert.deepEqual(acts.map((node) => [node.title, node.page]), [['Act I', 2], ['Act II', 3]]);
+    assert.deepEqual(scenes.map((node) => [node.title, node.page, node.parentId]), [
+      ['Scene I', 2, acts[0].id], ['Scene II', 2, acts[0].id], ['Scene I', 3, acts[1].id], ['Scene II', 4, acts[1].id],
+    ]);
+    assert.equal(result._tocEvidence.length, 0);
+    assert.deepEqual(result.candidates, []);
+    assert.deepEqual(result.failedPages, []);
+  } finally { await task.destroy(); }
+});
+
+test('local Hamlet has all five Acts and twenty Scenes at exact anchors, with no numeric Contents flood', async (context) => {
+  let data;
+  try { data = await readFile(new URL('../testing_downloads/Hamlet.pdf', import.meta.url)); }
+  catch (error) { if (error.code === 'ENOENT') { context.skip('Optional local Hamlet.pdf is absent; the original play fixture always runs.'); return; } throw error; }
+  const task = getDocument({ data: new Uint8Array(data), isEvalSupported: false, verbosity: 0 });
+  try {
+    const result = await analyzeDocumentStructure(await task.promise);
+    const acts = result.nodes.filter((node) => /^Act /.test(node.title));
+    const scenes = result.nodes.filter((node) => /^Scene /.test(node.title));
+    assert.deepEqual(acts.map((node) => [node.title, node.page, node.y, node.parentId, node.kind]),
+      [8, 40, 64, 96, 120].map((page, index) => [`Act ${index + 1}`, page, 898, null, 'part']));
+    const pagesByAct = [[8, 15, 24, 29, 32], [40, 44], [64, 70, 84, 87], [96, 98, 99, 101, 104, 112, 113], [120, 130]];
+    const yByAct = [[816, 816, 454, 696, 255], [816, 356], [816, 315, 816, 534], [816, 816, 694, 234, 695, 816, 695], [816, 816]];
+    assert.deepEqual(scenes.map((node) => [node.title, node.page, node.y, node.parentId, node.kind]),
+      pagesByAct.flatMap((pages, act) => pages.map((page, scene) => [`Scene ${scene + 1}`, page, yByAct[act][scene], acts[act].id, 'chapter'])));
+    assert.equal(new Set(result.nodes.map((node) => node.id)).size, result.nodes.length);
+    assert.equal(result.nodes.filter((node) => node.source !== 'fallback').length, 25);
+    assert.equal(result._tocEvidence.length, 0);
+    assert.equal(result.tocUnresolved, 0);
+    assert.equal(result.candidates.filter((node) => node.source === 'toc').length, 0);
+    assert.ok(![...result.nodes, ...result.candidates].some((node) => /FTLN|ACT\s+\d+\.\s+SC\./i.test(node.title)));
+    assert.equal(result.scannedPages.length, 144);
+    assert.deepEqual(result.failedPages, []);
+  } finally { await task.destroy(); }
+});

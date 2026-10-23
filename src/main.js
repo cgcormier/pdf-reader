@@ -1,12 +1,14 @@
 import './styles.css';
 import { openPdf, extractPage, renderPdfPage, titleFromFilename } from './pdf-engine.js';
 import { STRUCTURE_VERSION, readDocumentStructure, analyzeDocumentStructure } from './document-structure.js';
-import { STRUCTURE_KINDS, structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner } from './structure-model.js';
+import { shouldAutoScanStructure, structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner } from './structure-model.js';
 import { demo } from './demo.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
 import { turnPages } from './page-turn.js';
 import { paginateText, createBookPager } from './book-pagination.js';
+import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
+import { resolveReadingPosition, readingPosition, paginateLayout, renderLayout, renderAnnotations } from './layout-reading.js';
 import { preference, savePreference, getBook, putBook, updateBook, deleteBook, listBooks } from './storage.js';
 
 const $ = id => document.getElementById(id);
@@ -148,6 +150,7 @@ function attachTextSizeScrubber() {
   });
 }
 function applyAppearance() {
+  const scrollAnchor = layout === 'scroll' && mode === 'book' ? captureScrollAnchor(book.page) : null;
   document.documentElement.style.setProperty('--reading-size', `${Math.max(6, Math.min(23, appearance.size || 17))}px`);
   document.body.classList.toggle('dark-paper', appearance.paper === 'dark');
   document.documentElement.style.colorScheme = appearance.paper === 'dark' ? 'dark' : 'light';
@@ -161,6 +164,7 @@ function applyAppearance() {
   }
   savePreference('appearance', appearance);
   scroller?.reflow();
+  if (scrollAnchor) restoreScrollAnchor(scrollAnchor);
   if (fittedSpread && mode === 'book' && layout === 'pages') render();
 }
 applyAppearance();
@@ -174,11 +178,10 @@ function currentChapter(page = book.page) {
   return book.chapters.filter(chapter => chapter.page <= page).at(-1) || book.chapters[0];
 }
 function contentsNodes() {
-  return structureNodes(book.structure || structureFromLegacy(book.chapters, pageCount()), book.structureEdits, pageCount());
+  return structureNodes(book.structure || structureFromLegacy(book.chapters, pageCount()), pageCount());
 }
 function ensureStructure() {
-  book.structure ||= structureFromLegacy(book.chapters, pageCount(), book.source === 'manual');
-  book.structureEdits ||= {};
+  book.structure ||= structureFromLegacy(book.chapters, pageCount());
   book.contentsExpanded ||= {};
 }
 function stopStructureScan(markCancelled = false) {
@@ -193,9 +196,6 @@ async function startStructureScan(fresh = false) {
   stopStructureScan();
   const source = pdf;
   const target = book;
-  if (target.structure?.status === 'manual') {
-    for (const node of target.structure.nodes) target.structureEdits[node.id] = { ...node };
-  }
   const scan = createStructureScanner(analyzeDocumentStructure, {
     onUpdate: snapshot => {
       if (book !== target || pdf !== source) return;
@@ -206,21 +206,20 @@ async function startStructureScan(fresh = false) {
     onError: () => {
       if (book !== target) return;
       target.structure.status = 'error'; updateContents(); persist();
-      toast('Contents scanning paused. Your reading place and corrections are kept. Try scanning again.');
+      toast('Contents scanning paused. Your reading place is kept. Try scanning again.');
     },
     onFinish: () => { if (structureScan === scan) { structureScan = null; updateContents(); } },
   });
   structureScan = scan;
   let initial = fresh ? undefined : target.structure;
   if (initial?.version !== STRUCTURE_VERSION) initial = undefined;
-  // Manual corrections live outside the detected snapshot and survive every scan.
   if (target.structure) target.structure.status = 'scanning';
   updateContents();
   await scan.start(source, initial);
 }
 function maybeScanStructure() {
   ensureStructure();
-  if (book.id !== 'demo' && !['complete', 'cancelled', 'manual'].includes(book.structure.status)) void startStructureScan();
+  if (book.id !== 'demo' && shouldAutoScanStructure(book.structure, STRUCTURE_VERSION)) void startStructureScan();
 }
 function structureStatus() {
   if (book.id === 'demo') return 'A short read to make yourself at home.';
@@ -228,34 +227,27 @@ function structureStatus() {
   if (!structure) return 'Your saved contents. Scan the PDF to find parts and sections.';
   const scanned = structure.scannedPages?.length || 0;
   const failures = structure.failedPages?.length || 0;
-  if (structure.status === 'manual') return 'Your saved arrangement is kept. Scan the PDF when you want additional suggestions.';
   if (structure.status === 'scanning') return `Finding contents · ${scanned} of ${pageCount()} pages checked. You can keep reading.`;
   if (structure.status === 'cancelled') return `Scan stopped · ${scanned} of ${pageCount()} pages checked. Resume whenever you like.`;
-  if (structure.status === 'error') return `Scan paused after ${scanned} pages. Your contents and corrections are kept.`;
+  if (structure.status === 'error') return `Scan paused after ${scanned} pages. Your reading place is kept.`;
   if (structure.status !== 'complete') return 'Contents from your PDF. Checking for additional parts and sections.';
-  if (!structure.textPages && !structure.nodes.some(node => node.source === 'outline')) return 'No readable headings found. Use Original PDF or add entries with Edit.';
-  return `${scanned} of ${pageCount()} pages checked${failures ? ` · ${failures} unreadable` : ''}. ${structure.tocUnresolved ? `${structure.tocUnresolved} contents references need review. ` : ''}You can correct entries with Edit.`;
-}
-function reviewCandidates() {
-  return (book.structure?.candidates || []).filter(node => !book.structureEdits?.[node.id]);
+  if (!structure.textPages && !structure.nodes.some(node => node.source === 'outline')) return 'No readable headings found. Use Original PDF.';
+  return `${scanned} of ${pageCount()} pages checked${failures ? ` · ${failures} unreadable` : ''}.`;
 }
 function updateStructureTools() {
   let tools = $('structure-tools');
   if (!tools) {
     tools = el('div', 'structure-tools'); tools.id = 'structure-tools';
-    tools.append(button('Scan PDF', 'text-button', () => startStructureScan((book.structure?.status === 'complete' && !book.structure.failedPages?.length) || book.structure?.status === 'manual')),
-      button('Stop scan', 'text-button', () => { stopStructureScan(true); updateContents(); }),
-      button('Review suggestions', 'text-button', showStructureReview));
+    tools.append(button('Scan PDF', 'text-button', () => startStructureScan(book.structure?.status === 'complete' && !book.structure.failedPages?.length)),
+      button('Stop scan', 'text-button', () => { stopStructureScan(true); updateContents(); }));
     $('chapter-note').after(tools);
   }
   tools.hidden = book.id === 'demo';
-  const [scan, stop, review] = tools.children;
+  const [scan, stop] = tools.children;
   const running = Boolean(structureScan?.running) || book.structure?.status === 'scanning';
   scan.hidden = running; scan.disabled = Boolean(importing);
-  scan.textContent = ['cancelled', 'error'].includes(book.structure?.status) ? 'Resume scan' : book.structure?.failedPages?.length ? 'Retry unreadable pages' : book.structure?.status === 'manual' ? 'Scan PDF' : 'Scan PDF again';
+  scan.textContent = ['cancelled', 'error'].includes(book.structure?.status) ? 'Resume scan' : book.structure?.failedPages?.length ? 'Retry unreadable pages' : 'Scan PDF again';
   stop.hidden = !running;
-  const count = reviewCandidates().length;
-  review.hidden = !count; review.textContent = `Review suggestions (${count})`;
 }
 async function navigateStructure(node) {
   const navigationEpoch = ++structureNavigationEpoch;
@@ -271,7 +263,7 @@ async function navigateStructure(node) {
       if (book !== target || pdf !== source || navigationEpoch !== structureNavigationEpoch) return;
       const chapter = currentChapter(node.page);
       const paragraphs = chapter.page === node.page ? removeRepeatedChapterHeading(data.paragraphs, chapter.title) : data.paragraphs;
-      const text = paragraphs.join('\n\n');
+      const text = data.layout?.projection.text ?? paragraphs.join('\n\n');
       const normalize = value => value.replace(/[\s\p{P}]+/gu, '').toLowerCase();
       const needle = normalize(node.title);
       // Preserve indexes into the exact text string used by pagination.
@@ -283,6 +275,11 @@ async function navigateStructure(node) {
       }
       const match = needle ? compact.indexOf(needle) : -1;
       if (match >= 0) offset = indexes[match];
+      if (data.layout && node.y != null) {
+        const line = data.layout.lines.filter(l => Math.abs(l.sourceY - node.y) < 3)
+          .sort((a, b) => Math.abs(a.sourceY - node.y) - Math.abs(b.sourceY - node.y))[0];
+        if (line) offset = line.start;
+      }
       const height = page.view[3] - page.view[1];
       fraction = node.y != null && height > 0 ? Math.max(0, Math.min(0.98, (page.view[3] - node.y) / height)) : offset / Math.max(1, text.length);
     } catch { /* A valid page destination remains usable without an exact text anchor. */ }
@@ -290,7 +287,7 @@ async function navigateStructure(node) {
   if (book !== target || pdf !== source || navigationEpoch !== structureNavigationEpoch) return;
   navigate(node.page);
   selectedStructureId = node.id;
-  book.bookPosition = { page: node.page, offset, contentsId: node.id };
+  book.bookPosition = { page: node.page, offset, layoutVersion: LAYOUT_VERSION, contentsId: node.id };
   book.scrollPosition = { page: node.page, fraction, view: mode };
   if (layout === 'scroll' && scroller) scroller.jumpTo(node.page, { fraction, behavior: 'auto' });
   else if (mode === 'book' && offset > 0) render();
@@ -351,7 +348,6 @@ function updateContents() {
   $('book-title').textContent = book.title;
   $('book-author').textContent = book.author || `${pageCount()} pages · Your personal edition`;
   $('book-type').textContent = book.id === 'demo' ? 'A FOLIO ORIGINAL' : 'FROM YOUR SHELF';
-  $('edit-chapters').disabled = book.id === 'demo';
   $('original-view').disabled = !pdf;
   $('chapter-note').textContent = structureStatus();
   $('chapter-note').setAttribute('role', 'status');
@@ -406,7 +402,7 @@ function updateControls() {
 }
 async function persist() {
   const id = book.id;
-  const metadata = structuredClone({ page: book.page, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, structureEdits: book.structureEdits, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
+  const metadata = structuredClone({ page: book.page, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
   savePreference('active-book', id);
   if (id === 'demo') {
     saved = savePreference('demo', metadata);
@@ -499,6 +495,55 @@ function paperPage(number, side, offset = 0) {
   page.append(prose, el('div', 'page-number', `${number}${offset ? ' · continued' : ''}`));
   return page;
 }
+function prepareLayoutProse(prose, pageLayout, number) {
+  const key = value => String(value).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const first = pageLayout.blocks[0];
+  if (first?.role === 'heading' && key(pageLayout.projection.text.slice(first.start, first.end)) === key(currentChapter(number).title)) prose.querySelector('.chapter-intro')?.remove();
+}
+function appendLayoutExtras(page, pageLayout, number) {
+  if (page.querySelector('.layout-source-notes') || (!pageLayout.annotations.length && !pageLayout.fallbacks.length)) return;
+  const notes = button(pageLayout.fallbacks.length ? 'Source notes · check Original' : `Source notes (${pageLayout.annotations.length})`, 'text-button layout-source-notes', () => {
+    const content = el('div');
+    for (const fallback of pageLayout.fallbacks) content.append(el('p', 'inline-note', fallback.reason));
+    renderAnnotations(content, pageLayout);
+    content.append(button('View original page ↗', 'secondary-button', () => { $('modal').close(); navigate(number); setMode('original'); }));
+    showModal(`Source page ${number}`, content);
+  });
+  page.insertBefore(notes, page.querySelector('.page-number'));
+}
+function captureScrollAnchor(number) {
+  const page = $('scroll-stage')?.querySelector(`[data-source-page="${number}"]`);
+  if (!page?.layoutModel) return null;
+  const readingY = $('scroll-stage').getBoundingClientRect().top + 18;
+  const nodes = [...page.querySelectorAll('[data-layout-start]')];
+  const node = nodes.find(n => n.getBoundingClientRect().bottom > readingY) ?? nodes.at(-1);
+  if (!node) return null;
+  const box = node.getBoundingClientRect();
+  const y = Math.max(box.top + 1, Math.min(box.bottom - 1, readingY));
+  const caret = document.caretRangeFromPoint?.(box.left + Math.min(18, box.width / 4), y);
+  let offset = Number(node.dataset.layoutStart);
+  if (caret && node.contains(caret.startContainer)) {
+    const before = document.createRange(); before.selectNodeContents(node);
+    before.setEnd(caret.startContainer, caret.startOffset); offset += before.toString().length;
+  }
+  return readingPosition(page.layoutModel, number, offset, book.bookPosition);
+}
+function restoreScrollAnchor(position) {
+  const page = $('scroll-stage')?.querySelector(`[data-source-page="${position.page}"]`);
+  if (!page?.layoutModel || !scroller || !position.source) return;
+  const offset = offsetForSource(page.layoutModel.projection, position.source);
+  const nodes = [...page.querySelectorAll('[data-layout-start]')];
+  const node = nodes.find(n => Number(n.dataset.layoutStart) <= offset && Number(n.dataset.layoutEnd) > offset);
+  if (!node) return;
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  let remaining = offset - Number(node.dataset.layoutStart); let textNode;
+  while ((textNode = walker.nextNode())) { if (remaining < textNode.length) break; remaining -= textNode.length; }
+  const range = document.createRange();
+  if (textNode) { range.setStart(textNode, remaining); range.setEnd(textNode, Math.min(textNode.length, remaining + 1)); }
+  else range.selectNodeContents(node);
+  const pageBox = page.getBoundingClientRect(); const box = range.getBoundingClientRect();
+  scroller.jumpTo(position.page, { fraction: Math.max(0, (box.top - pageBox.top) / pageBox.height), behavior: 'auto' });
+}
 async function fillPaperPage(number, page, { signal, renderEpoch, source }) {
   const prose = page.querySelector('.page-prose');
   page.classList.add('is-loading');
@@ -512,7 +557,12 @@ async function fillPaperPage(number, page, { signal, renderEpoch, source }) {
     } else {
       const chapter = currentChapter(number);
       const paragraphs = source && chapter.page === number ? removeRepeatedChapterHeading(data.paragraphs, chapter.title) : data.paragraphs;
-      paragraphs.forEach((text, index) => prose.append(el('p', index === 0 && chapter.page === number ? 'drop-cap' : '', text)));
+      if (data.layout) {
+        page.layoutModel = data.layout;
+        prepareLayoutProse(prose, data.layout, number);
+        renderLayout(prose, data.layout, { decorate: chapter.page === number });
+        appendLayoutExtras(page, data.layout, number);
+      } else paragraphs.forEach((text, index) => prose.append(el('p', index === 0 && chapter.page === number ? 'drop-cap' : '', text)));
     }
   } catch {
     if (!signal.aborted && renderEpoch === epoch) {
@@ -560,6 +610,12 @@ function fillFragment(page, fragment) {
     prose.append(notice);
   } else if (fragment.kind === 'error') {
     prose.append(el('p', '', 'This page needs another try.'), button('Try again', 'secondary-button', () => { pageCache.delete(fragment.page); render(); }));
+  } else if (fragment.kind === 'overflow') {
+    prose.append(el('p', 'inline-note', 'This leaf is too small for the source text.'), button('View original page ↗', 'secondary-button', () => { navigate(fragment.page); setMode('original'); }));
+  } else if (fragment.layout) {
+    prepareLayoutProse(prose, fragment.layout, fragment.page);
+    renderLayout(prose, fragment.layout, { start: fragment.start, end: fragment.end, decorate: !!intro });
+    appendLayoutExtras(page, fragment.layout, fragment.page);
   } else {
     fragment.text.split(/\n{2,}/).filter(text => text.trim()).forEach((text, index) => {
       prose.append(el('p', index === 0 && intro ? 'drop-cap' : '', text));
@@ -588,7 +644,7 @@ function fittedPager({ signal, renderEpoch, source }) {
       else {
         const chapter = currentChapter(number);
         const paragraphs = source && chapter.page === number ? removeRepeatedChapterHeading(data.paragraphs, chapter.title) : data.paragraphs;
-        const text = paragraphs.join('\n\n');
+        const text = data.layout?.projection.text ?? paragraphs.join('\n\n');
         const bounds = $('book-spread').getBoundingClientRect();
         const host = el('div', 'book-measure');
         host.setAttribute('aria-hidden', 'true'); host.inert = true;
@@ -599,15 +655,16 @@ function fittedPager({ signal, renderEpoch, source }) {
         host.append(first, continuation);
         document.body.append(host);
         try {
-          fragments = paginateText(text, (slice, { start, end }) => {
+          const fits = (slice, { start, end }) => {
             check();
             const page = start === 0 ? first : continuation;
-            fillFragment(page, { page: number, start, end, text: slice });
+            fillFragment(page, { page: number, start, end, text: slice, layout: data.layout });
             const prose = page.querySelector('.page-prose');
             // Leave a pixel for rounding at the last line's lower edge.
             const last = prose.lastElementChild;
             return prose.scrollHeight <= prose.clientHeight && (!last || last.getBoundingClientRect().bottom <= prose.getBoundingClientRect().bottom - 1);
-          }, { signal });
+          };
+          fragments = data.layout ? paginateLayout(data.layout, fits, { signal }) : paginateText(text, fits, { signal });
         } finally { host.remove(); }
       }
       check();
@@ -637,7 +694,9 @@ function commitSpread(spread, pages, place = spread.anchor) {
   // Rewrapping changes the visible leaf's start, but must not move the saved
   // text anchor backward on every font, window or focus change.
   const sourceEnd = fragmentCache.get(book.page)?.at(-1)?.end || 0;
-  book.bookPosition = place.page === book.page ? { page: book.page, offset: Math.min(place.offset, sourceEnd) } : spread.anchor;
+  const offset = place.page === book.page ? Math.min(place.offset, sourceEnd) : spread.anchor.offset;
+  const pageLayout = spread.leaves[0]?.layout;
+  book.bookPosition = pageLayout ? readingPosition(pageLayout, book.page, offset, place) : { page: book.page, offset };
   if (contentsNodes().some(node => node.id === selectedStructureId && node.page === book.page)) book.bookPosition.contentsId = selectedStructureId;
   book.scrollPosition = { page: book.page, fraction: 0, view: mode };
   $('book-spread').replaceChildren(...pages);
@@ -659,6 +718,7 @@ async function render() {
   $('book-spread').replaceChildren();
   $('original-stage').replaceChildren();
   if (layout === 'scroll') {
+    const restorePosition = { ...book.bookPosition };
     const previous = book.scrollPosition;
     const fraction = previous?.page === book.page && previous.view === mode ? previous.fraction : 0;
     scroller = createPageScroller($('scroll-stage'), {
@@ -666,14 +726,27 @@ async function render() {
       estimateHeight: mode === 'original' ? 800 : smallScreen.matches ? 500 : 620,
       maxMounted: mode === 'original' ? 4 : 7, overscan: mode === 'original' ? 1 : 2, maxConcurrent: 2,
       createPage: number => mode === 'original' ? originalScrollPage(number) : paperPage(number, 'scroll'),
-      loadPage: (number, page, { signal }) => mode === 'original'
-        ? fillOriginalPage(number, page, { signal, renderEpoch, source })
-        : fillPaperPage(number, page, { signal, renderEpoch, source }),
+      loadPage: async (number, page, { signal }) => {
+        if (mode === 'original') await fillOriginalPage(number, page, { signal, renderEpoch, source });
+        else {
+          await fillPaperPage(number, page, { signal, renderEpoch, source });
+          if (!signal.aborted && renderEpoch === epoch && restorePosition.page === number
+            && (restorePosition.source || restorePosition.offset > 0 || Number.isFinite(restorePosition.offset) && restorePosition.layoutVersion !== LAYOUT_VERSION)) {
+            const data = await pageText(number, source);
+            const mapped = resolveReadingPosition(data, restorePosition, currentChapter(number).title);
+            if (!signal.aborted && renderEpoch === epoch) {
+              book.bookPosition = mapped;
+              requestAnimationFrame(() => { if (renderEpoch === epoch) restoreScrollAnchor(mapped); });
+            }
+          }
+        }
+      },
       onPosition: position => {
         if (renderEpoch !== epoch) return;
         const changed = book.page !== position.page;
         book.page = position.page;
-        book.bookPosition = { page: position.page, offset: 0 };
+        const sourcePlace = mode === 'book' ? captureScrollAnchor(position.page) : null;
+        book.bookPosition = sourcePlace ?? (book.bookPosition?.page === position.page ? book.bookPosition : { page: position.page, offset: 0, layoutVersion: LAYOUT_VERSION });
         if (contentsNodes().some(node => node.id === selectedStructureId && node.page === position.page)) book.bookPosition.contentsId = selectedStructureId;
         book.scrollPosition = { ...position, view: mode };
         if (changed) updateReadingPosition();
@@ -700,7 +773,13 @@ async function render() {
   $('book-spread').replaceChildren(paperPage(book.page, 'left'));
   pageFillPromise = (async () => {
     try {
-      const anchor = readingAnchor();
+      let anchor = readingAnchor();
+      if (source) {
+        const data = await pageText(anchor.page, source);
+        if (signal.aborted || renderEpoch !== epoch) return;
+        anchor = resolveReadingPosition(data, { ...book.bookPosition, ...anchor, ...(!book.bookPosition ? { layoutVersion: LAYOUT_VERSION } : {}) }, currentChapter(anchor.page).title);
+        book.bookPosition = anchor;
+      }
       const spread = await fittedPager({ signal, renderEpoch, source }).spread(anchor, step());
       if (signal.aborted || renderEpoch !== epoch) return;
       commitSpread(spread, spreadPages(spread), anchor);
@@ -753,7 +832,7 @@ function navigate(number) {
   cancelPageTurn();
   ++structureNavigationEpoch; selectedStructureId = null;
   book.page = number;
-  book.bookPosition = { page: number, offset: 0 };
+  book.bookPosition = { page: number, offset: 0, layoutVersion: LAYOUT_VERSION };
   book.scrollPosition = { page: number, fraction: 0, view: mode };
   if (layout === 'scroll' && scroller) {
     scroller.jumpTo(number, { behavior: 'auto' });
@@ -775,12 +854,10 @@ $('page-input').addEventListener('blur', () => { $('page-input').value = book.pa
 $('progress-slider').addEventListener('change', event => navigate(Number(event.target.value)));
 function setMode(value) {
   if (mode === value) return;
-  book.bookPosition = { page: book.page, offset: 0 };
   flushScrollSave(); mode = value; render();
 }
 function setLayout(value) {
   if (layout === value) return;
-  book.bookPosition = { page: book.page, offset: 0 };
   flushScrollSave(); layout = value; savePreference('reading-layout', layout); render();
 }
 $('book-view').addEventListener('click', () => setMode('book'));
@@ -939,7 +1016,7 @@ async function importFile(file) {
     const structure = await readDocumentStructure(candidate, { signal: controller.signal });
     if (controller.signal.aborted) return;
     const nextBook = { id: crypto.randomUUID(), title: titleFromFilename(file.name), filename: file.name, bytes, structure,
-      structureEdits: {}, contentsExpanded: {}, chapters: chaptersFromNodes(structure.nodes), source: 'structure', scannedPages: 0, page: 1, bookmarks: [], addedAt: Date.now() };
+      contentsExpanded: {}, chapters: chaptersFromNodes(structure.nodes), source: 'structure', scannedPages: 0, page: 1, bookmarks: [], addedAt: Date.now() };
     try { await putBook(nextBook); saved = true; bookStored = true; }
     catch { saved = false; bookStored = false; toast('Your PDF is open, but the shelf could not save it. Keep the source file and choose it again next time.'); }
     flushScrollSave(); stopStructureScan(); stopReadingRender(); ++epoch; selectedStructureId = null;
@@ -1016,7 +1093,7 @@ $('library-button').addEventListener('click', async () => {
   shelf.forEach((item, index) => {
     const row = el('div', 'shelf-item');
     const info = el('div', 'shelf-info');
-    const count = item.structure ? structureNodes(item.structure, item.structureEdits, item.structure.totalPages).length : item.chapters.length;
+    const count = item.structure ? structureNodes(item.structure, item.structure.totalPages).length : item.chapters.length;
     info.append(el('h3', '', item.title), el('p', 'inline-note', `Last read: page ${item.page} · ${count} contents entries`));
     if (item.bookmarks.length) {
       const marks = el('div', 'bookmark-links');
@@ -1046,89 +1123,6 @@ $('library-button').addEventListener('click', async () => {
   showModal('Your shelf', content);
 });
 
-function showStructureEditor(extra = null) {
-  if (importing) return;
-  if (book.id === 'demo') return;
-  ensureStructure();
-  const originalNodes = contentsNodes();
-  const target = book;
-  const form = el('form');
-  form.append(el('p', 'modal-copy', 'Arrange parts, chapters and sections. Page numbers include covers. Your corrections stay on this shelf and survive future scans.'));
-  const rows = el('div');
-  const draft = [...originalNodes, ...(extra ? [{ ...extra, id: extra.id || `manual-${crypto.randomUUID()}`, parentId: null, page: extra.page || book.page, kind: extra.kind || 'heading' }] : [])];
-  function addRow(node = { id: `manual-${crypto.randomUUID()}`, title: '', page: book.page, parentId: null, kind: 'chapter' }) {
-    const row = el('fieldset', 'structure-edit-row'); row.dataset.nodeId = node.id;
-    const title = el('input'); title.value = node.title; title.placeholder = 'Title'; title.required = true; title.maxLength = 200; title.setAttribute('aria-label', 'Contents title');
-    const page = el('input'); page.type = 'number'; page.value = node.page; page.min = 1; page.max = pageCount(); page.required = true; page.setAttribute('aria-label', 'First PDF page');
-    const kind = el('select'); kind.setAttribute('aria-label', 'Entry type');
-    for (const value of STRUCTURE_KINDS) { const option = el('option', '', value === 'frontmatter' ? 'Opening pages' : value[0].toUpperCase() + value.slice(1)); option.value = value; kind.append(option); }
-    kind.value = node.kind;
-    const parent = el('select'); parent.setAttribute('aria-label', 'Parent entry');
-    const top = el('option', '', 'Top level'); top.value = ''; parent.append(top);
-    for (const entry of [...draft, ...[...rows.children].map(row => ({ id: row.dataset.nodeId, title: row.querySelector('input').value }))]) {
-      if (entry.id === node.id || [...parent.options].some(option => option.value === entry.id)) continue;
-      const option = el('option', '', entry.title || 'Untitled entry'); option.value = entry.id; parent.append(option);
-    }
-    parent.value = node.parentId || '';
-    const remove = button('Remove', 'text-button', () => row.remove()); remove.setAttribute('aria-label', `Remove ${node.title || 'entry'}`);
-    row.append(title, page, kind, parent, remove); rows.append(row);
-    // Newly added groups can be chosen by entries already in the form.
-    for (const existing of [...rows.children].filter(entry => entry !== row)) {
-      const parentSelect = existing.querySelectorAll('select')[1];
-      if (![...parentSelect.options].some(option => option.value === node.id)) { const option = el('option', '', node.title || 'New entry'); option.value = node.id; parentSelect.append(option); }
-    }
-  }
-  draft.forEach(addRow);
-  const note = el('p', 'inline-note', 'Several entries may begin on the same PDF page. Removing a group keeps its children at the top level.');
-  const error = el('p', 'inline-note'); error.setAttribute('role', 'alert');
-  form.append(rows, button('＋ Add an entry', 'text-button', () => addRow()), note, error, actions(button('Cancel', 'secondary-button', () => $('modal').close()), button('Save contents', 'primary-button', () => form.requestSubmit())));
-  form.addEventListener('submit', event => {
-    event.preventDefault();
-    if (book !== target) return;
-    const entries = [...rows.children].map(row => ({ id: row.dataset.nodeId, title: row.children[0].value.trim(), page: Number(row.children[1].value), kind: row.children[2].value, parentId: row.children[3].value || null }));
-    if (!entries.length || entries.some(node => !node.title || !Number.isInteger(node.page) || node.page < 1 || node.page > pageCount())) { error.textContent = 'Add at least one titled entry with a valid PDF page.'; return; }
-    const byId = new Map(entries.map(node => [node.id, node]));
-    for (const node of entries) {
-      if (!byId.has(node.parentId)) node.parentId = null;
-      const visited = new Set([node.id]); let parent = byId.get(node.parentId);
-      while (parent) {
-        if (visited.has(parent.id)) { error.textContent = 'Choose parents that do not create a circular group.'; return; }
-        if (parent.page > node.page) { error.textContent = 'A group must begin on or before its children.'; return; }
-        visited.add(parent.id); parent = byId.get(parent.parentId);
-      }
-    }
-    const edits = { ...book.structureEdits };
-    for (const node of originalNodes) if (!byId.has(node.id)) edits[node.id] = { hidden: true };
-    for (const node of entries) {
-      const original = originalNodes.find(entry => entry.id === node.id);
-      if (!original || ['title', 'page', 'kind', 'parentId'].some(key => node[key] !== original[key])) edits[node.id] = { ...original, ...node, y: node.page !== original?.page ? null : original.y, hidden: false };
-    }
-    book.structureEdits = edits;
-    $('modal').close(); updateContents(); updateReadingPosition(); persist(); toast('Your contents are arranged.');
-  });
-  showModal('Arrange your contents', form);
-}
-$('edit-chapters').addEventListener('click', () => showStructureEditor());
-function showStructureReview() {
-  if (importing) return;
-  const content = el('div');
-  content.append(el('p', 'modal-copy', 'These headings need a check. Add the useful ones to Contents, or dismiss them. Changes stay on your shelf.'));
-  const candidates = reviewCandidates();
-  if (!candidates.length) content.append(el('p', 'inline-note', 'No suggestions waiting for review.'));
-  for (const candidate of candidates) {
-    const row = el('div', 'structure-review-row');
-    row.append(el('h3', '', candidate.title), el('p', 'inline-note', candidate.evidence?.join(' · ') || 'Uncertain heading'));
-    const validPage = Number.isInteger(candidate.page) && candidate.page >= 1 && candidate.page <= pageCount();
-    if (validPage) row.append(el('p', 'inline-note', `PDF page ${candidate.page}`));
-    row.append(actions(button(validPage ? 'Add to contents' : 'Choose PDF page', 'secondary-button', () => {
-      if (!validPage) return showStructureEditor(candidate);
-      book.structureEdits[candidate.id] = { ...candidate, hidden: false, parentId: candidate.parentId || null };
-      updateContents(); persist(); showStructureReview();
-    }), button('Dismiss', 'text-button', () => { book.structureEdits[candidate.id] = { hidden: true }; updateContents(); persist(); showStructureReview(); })));
-    content.append(row);
-  }
-  showModal('Review contents suggestions', content);
-}
 // A normal reload resumes its checkpoint. Only the explicit Stop action pauses it.
 window.addEventListener('pagehide', () => { stopStructureScan(); });
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; });

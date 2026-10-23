@@ -1,0 +1,84 @@
+/* One scale controls the books and board together; header height never stretches them. */
+.app-header .shelf-shortcut {
+  --shelf-unit: 1px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: auto;
+  height: 54px;
+  color: var(--terracotta);
+  border-radius: 3px;
+}
+.app-header .shelf-art {
+  position: relative;
+  display: grid;
+  grid-template-rows: calc(42 * var(--shelf-unit)) calc(12 * var(--shelf-unit));
+  width: calc(144 * var(--shelf-unit));
+  height: calc(54 * var(--shelf-unit));
+  flex: none;
+  pointer-events: none;
+}
+.app-header .shelf-spines {
+  align-self: end;
+  justify-content: center;
+  height: 100%;
+  gap: calc(2 * var(--shelf-unit));
+  padding: 0 calc(9 * var(--shelf-unit));
+}
+.app-header .shelf-spine {
+  --spine-height: calc(31 * var(--shelf-unit));
+  width: calc(12 * var(--shelf-unit));
+  flex-shrink: 0;
+}
+.app-header .shelf-spine:nth-child(2) { --spine-height: calc(40 * var(--shelf-unit)); width: calc(16 * var(--shelf-unit)); }
+.app-header .shelf-spine:nth-child(3) { --spine-height: calc(35 * var(--shelf-unit)); width: calc(13 * var(--shelf-unit)); }
+.app-header .shelf-spine:nth-child(4) { --spine-height: calc(33 * var(--shelf-unit)); width: calc(13 * var(--shelf-unit)); }
+.app-header .shelf-spine:nth-child(5) { --spine-height: calc(39 * var(--shelf-unit)); width: calc(16 * var(--shelf-unit)); }
+.app-header .shelf-spine:nth-child(6) { --spine-height: calc(34 * var(--shelf-unit)); width: calc(12 * var(--shelf-unit)); }
+.app-header .shelf-spine:nth-child(7) { --spine-height: calc(38 * var(--shelf-unit)); width: calc(8 * var(--shelf-unit)); }
+.app-header .shelf-spine:nth-child(8) { --spine-height: calc(30 * var(--shelf-unit)); width: calc(13 * var(--shelf-unit)); margin-left: calc(3 * var(--shelf-unit)); transform: rotate(-12deg); }
+.app-header .shelf-spine-cover { border-width: 1px; }
+.app-header button.shelf-spine { z-index: 2; pointer-events: auto; }
+.app-header .shelf-stand { width: 100%; height: 100%; }
+.app-header .header-actions .shelf-caption.quiet-button {
+  order: -1;
+  position: static;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: auto;
+  min-height: 44px;
+  padding: 0;
+  color: var(--ink-soft);
+  font: italic 13px/1.2 var(--serif);
+  text-align: left;
+  white-space: nowrap;
+  background: transparent;
+}
+/* The existing library button also owns gaps, placeholder books, and the board.
+   Saved-book buttons sit above this hit area and keep their direct-open action. */
+.app-header .shelf-caption::after { content: ''; position: absolute; inset: 0; z-index: 1; cursor: pointer; }
+.app-header .shelf-invitation-line { display: block; }
+.app-header .shelf-invitation-line:nth-child(3) { text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--rule); }
+.app-header .shelf-caption .count { position: absolute; width: 1px; min-width: 0; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.app-header .shelf-shortcut:has(.shelf-caption:hover) { color: var(--terracotta-dark); }
+.app-header .shelf-shortcut:has(.shelf-caption:focus-visible) { outline: 2px solid var(--terracotta); outline-offset: 3px; }
+.app-header .shelf-caption:focus-visible { outline: none; }
+.app-header .shelf-tooltip { top: calc(100% + 17px); }
+.app-header button.shelf-spine:is(:hover, :focus-visible) .shelf-spine-cover { transform: translateY(-3px); }
+@media (max-width: 900px) {
+  .app-header .header-motto { display: none; }
+}
+@media (max-width: 500px) {
+  .app-header .shelf-shortcut { --shelf-unit: .7px; gap: 7px; height: 44px; }
+  .app-header .header-actions .shelf-caption.quiet-button { font-size: 10px; }
+}
+@media (max-width: 365px) {
+  .app-header .shelf-shortcut { --shelf-unit: .56px; gap: 5px; }
+  .app-header .header-actions .shelf-caption.quiet-button { font-size: 9px; }
+  .app-header .header-actions .primary-button { padding: 0 7px; font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-header .shelf-spine-cover, .app-header .shelf-tooltip { transition: none; }
+}
