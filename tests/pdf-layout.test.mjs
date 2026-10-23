@@ -12,6 +12,19 @@ const item = (str, x, y, size = 10, width = str.length * size * .45, extra = {})
 const layout = items => interpretPage({ items });
 const text = l => l.projection.text;
 const valid = l => assert.deepEqual(conservation(l), { valid: true, errors: [] });
+
+test('indexed layout slices retain exact boundaries and source lines across a large page', () => {
+  const blocks = Array.from({ length: 200 }, (_, index) => ({ id: `b${index}`, start: index * 10, end: index * 10 + 8,
+    lines: [{ start: index * 10, end: index * 10 + 3 }, { start: index * 10 + 4, end: index * 10 + 8 }] }));
+  const page = { blocks, projection: { text: '0123456789'.repeat(200) } };
+  for (const [start, end] of [[0, 3], [3, 4], [8, 10], [12, 35], [1900, 1998], [1998, 2000], [50, 50]]) {
+    const reference = blocks.filter(b => b.end > start && b.start < end).map(b => ({ ...b, continued: start > b.start,
+      lines: b.lines.filter(l => l.end > start && l.start < end).map(l => ({ ...l,
+        text: page.projection.text.slice(Math.max(start, l.start), Math.min(end, l.end)),
+        fragmentStart: Math.max(start, l.start), fragmentEnd: Math.min(end, l.end) })) }));
+    assert.deepEqual(layoutSlice(page, start, end), reference);
+  }
+});
 function lowered({ size = 30, y = 660, quote = false } = {}) {
   return [item('M', 40, y, size, 25), ...(quote ? [item('“', 33, 674, 10, 5)] : []),
     item('y goal in writing this book has been to create a very inexpensive', 66, 674, 10, 350),

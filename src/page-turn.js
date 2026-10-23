@@ -1,24 +1,8 @@
-function clonePage(page, className) {
-  const clone = page.cloneNode(true);
-  clone.classList.add(className);
-  clone.setAttribute('aria-hidden', 'true');
-  clone.inert = true;
-
-  // A turn temporarily duplicates the live pages. Keep the copies out of the
-  // document's ID namespace.
-  for (const node of [clone, ...clone.querySelectorAll('[id]')]) node.removeAttribute('id');
-  return clone;
-}
-
-function markHidden(page) {
-  const alreadyHidden = page.classList.contains('turn-origin');
-  if (!alreadyHidden) page.classList.add('turn-origin');
-  return () => { if (!alreadyHidden) page.classList.remove('turn-origin'); };
-}
-
 /**
- * Animate a temporary page-turn overlay. The caller retains ownership of the
- * reading position and replaces the stage pages only after this resolves as
+ * Animate borrowed pages without duplicating their text trees. Empty placeholders
+ * retain the source grid slots; cleanup restores identity, order and listeners.
+ * The caller retains ownership of the reading position and replaces the stage
+ * pages only after this resolves as
  * "finished".
  */
 export async function turnPages({ stage, targetPages, direction, singlePage, signal, reducedMotion = false, duration = 420 }) {
@@ -39,46 +23,56 @@ export async function turnPages({ stage, targetPages, direction, singlePage, sig
   layer.className = `page-turn-layer ${forward ? 'turn-forward' : 'turn-backward'}${singlePage ? ' turn-single' : ''}`;
   layer.setAttribute('aria-hidden', 'true');
   layer.inert = true;
-  const copies = [];
-  const copyPage = (page, className) => {
-    const copy = clonePage(page, className);
-    copies.push([page, copy]);
-    return copy;
+  const borrowed = [];
+  const borrowPage = (page, className) => {
+    const parent = page.parentNode;
+    const prose = page.querySelector('.page-prose');
+    const scrollTop = prose?.scrollTop ?? 0;
+    const hadClass = page.classList.contains(className);
+    let placeholder = null;
+    if (parent) {
+      placeholder = doc.createElement('div');
+      placeholder.className = 'paper-page turn-origin';
+      placeholder.setAttribute('aria-hidden', 'true');
+      parent.replaceChild(placeholder, page);
+    }
+    if (!hadClass) page.classList.add(className);
+    borrowed.push({ page, prose, scrollTop, placeholder, className, hadClass });
+    return page;
   };
 
   if (!singlePage) {
     const revealPage = targetPages[forward ? 1 : 0];
-    if (revealPage) layer.append(copyPage(revealPage, 'page-turn-reveal'));
+    if (revealPage) layer.append(borrowPage(revealPage, 'page-turn-reveal'));
   }
 
   const leaf = doc.createElement('div');
   leaf.className = 'page-turn-leaf';
   const front = doc.createElement('div');
   front.className = 'page-turn-face page-turn-front';
-  front.append(copyPage(sourceMoving, 'page-turn-copy'));
+  front.append(borrowPage(sourceMoving, 'page-turn-page'));
   const back = doc.createElement('div');
   back.className = 'page-turn-face page-turn-back';
-  back.append(copyPage(destinationMoving, 'page-turn-copy'));
+  back.append(borrowPage(destinationMoving, 'page-turn-page'));
   leaf.append(front, back);
   layer.append(leaf);
 
-  const restoreOrigin = markHidden(sourceMoving);
   const hadTurning = stage.classList.contains('is-turning');
   if (!hadTurning) stage.classList.add('is-turning');
   stage.append(layer);
-  // Chrome clamps scrollTop on detached nodes. Restore after the copies have
-  // real layout so a long page doesn't jump back to its beginning mid-turn.
-  for (const [source, copy] of copies) {
-    const prose = source.querySelector('.page-prose');
-    const copiedProse = copy.querySelector('.page-prose');
-    if (prose && copiedProse) copiedProse.scrollTop = prose.scrollTop;
-  }
+  // Restore after mounting: detached prose may have its scrollTop clamped.
+  for (const { prose, scrollTop } of borrowed) if (prose) prose.scrollTop = scrollTop;
 
   let onAbort = () => {};
   const cleanup = () => {
     signal?.removeEventListener('abort', onAbort);
+    for (const { page, prose, scrollTop, placeholder, className, hadClass } of borrowed) {
+      if (!hadClass) page.classList.remove(className);
+      if (placeholder?.parentNode) placeholder.parentNode.replaceChild(page, placeholder);
+      else page.remove();
+      if (prose) prose.scrollTop = scrollTop;
+    }
     layer.remove();
-    restoreOrigin();
     if (!hadTurning) stage.classList.remove('is-turning');
   };
 

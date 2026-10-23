@@ -2,6 +2,16 @@ import { LAYOUT_VERSION, layoutSlice, sourceAt, offsetForSource, resolveSource }
 import { removeRepeatedChapterHeading } from './book-layout.js';
 import { paginateText } from './book-pagination.js';
 
+const renderIndexes = new WeakMap();
+function renderIndex(layout) {
+  if (!renderIndexes.has(layout)) {
+    const speakers = new Map();
+    for (const block of layout.blocks) if (block.association && block.speaker && !speakers.has(block.association)) speakers.set(block.association, block);
+    renderIndexes.set(layout, { speakers, regions: new Map(layout.regions.map(region => [region.id, region])) });
+  }
+  return renderIndexes.get(layout);
+}
+
 /** Resolve an unversioned offset through its original, heading-dependent text. */
 export function resolveReadingPosition(data, position, chapterTitle = '') {
   if (!data.layout) return { ...position };
@@ -47,6 +57,7 @@ export function paginateLayout(layout, fits, { signal } = {}) {
 /** Render only text nodes, in canonical reading order. Shared by both views. */
 export function renderLayout(host, layout, { start = 0, end = layout.projection.text.length, decorate = false } = {}) {
   const doc = host.ownerDocument;
+  const { speakers, regions } = renderIndex(layout);
   for (const block of layoutSlice(layout, start, end)) {
     const preserve = !['paragraph', 'list'].includes(block.role);
     const node = doc.createElement(block.role === 'heading' ? 'h3' : preserve ? 'div' : 'p');
@@ -55,7 +66,7 @@ export function renderLayout(host, layout, { start = 0, end = layout.projection.
     node.dataset.layoutEnd = Math.min(end, block.end);
     if (block.association) {
       node.dataset.speech = block.association; node.setAttribute('role', 'group');
-      const speakerBlock = layout.blocks.find(b => b.association === block.association && b.speaker);
+      const speakerBlock = speakers.get(block.association);
       if (speakerBlock) node.setAttribute('aria-label', `Speech by ${speakerBlock.speaker}`);
     }
     node.style.textAlign = block.align;
@@ -67,7 +78,7 @@ export function renderLayout(host, layout, { start = 0, end = layout.projection.
       if (index) node.append(doc.createTextNode('\n'));
       const span = doc.createElement('span'); span.className = 'layout-line';
       span.dataset.layoutStart = line.fragmentStart; span.dataset.layoutEnd = line.fragmentEnd;
-      const region = layout.regions.find(r => r.id === block.regionId);
+      const region = regions.get(block.regionId);
       span.style.setProperty('--line-indent', `${Math.max(0, Math.min(6, (line.x - (region?.x ?? line.x)) / layout.bodySize))}em`);
       span.textContent = line.text;
       // Labels may share a source TextItem with speech. This is a conservative
