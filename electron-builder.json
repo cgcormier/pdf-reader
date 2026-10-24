@@ -1,0 +1,22 @@
+{
+  "appId": "com.folio.reader",
+  "productName": "Folio",
+  "directories": { "output": "release", "buildResources": "public" },
+  "files": ["dist/**/*", "desktop/**/*", "package.json", "!node_modules/**/*"],
+  "asar": true,
+  "npmRebuild": false,
+  "compression": "maximum",
+  "win": {
+    "target": [{ "target": "portable", "arch": ["x64"] }],
+    "icon": "public/icon.ico",
+    "signExecutable": false,
+    "artifactName": "Folio-${version}-Windows-${arch}.${ext}"
+  },
+  "portable": { "requestExecutionLevel": "user" },
+  "linux": {
+    "target": ["tar.gz"],
+    "category": "Office",
+    "icon": "public/icon-512.png",
+    "artifactName": "Folio-${version}-Linux-${arch}.${ext}"
+  }
+}
