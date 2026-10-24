@@ -1,10 +1,18 @@
 # Folio
 
-A tiny local PDF reading room in Chrome: walnut accents, parchment, serif type, chapter contents and source page numbers. Choose continuous scrolling or an open-book spread. The design and build pipeline are in [docs/PLAN.md](docs/PLAN.md).
+A tiny local PDF reading room for Windows, also available in Chrome: walnut accents, parchment, serif type, chapter contents and source page numbers. Choose continuous scrolling or an open-book spread. The design and build pipeline are in [docs/PLAN.md](docs/PLAN.md).
 
 ## Open it
 
-Double-click **Folio** on your Desktop, or **Start Folio.cmd** in this folder. The launcher starts a server at **http://127.0.0.1:4173/** and opens Chrome. A Desktop shortcut has been created at `C:\Users\ccorm\OneDrive\Desktop\Folio.lnk` on this machine. Keep the app folder in place; the shortcut points here.
+Double-click **Folio-1.0.0-Windows-x64.exe** from `release/`. This is a portable desktop app for **64-bit Windows 10 or later**. It opens its own window and includes Chromium, the reader, PDF.js, fonts and PDF assets. No Node.js, Chrome installation, local server, administrator access, or internet connection is required to read PDFs. Close the window to quit; opening the executable again while Folio is running brings the existing window forward.
+
+The executable can be moved to a convenient folder. Its bundled application files are extracted to a temporary folder at launch; your shelf, preferences and reading positions are stored separately in **`%APPDATA%\Folio`**. Replacing the executable with a new build preserves that data. Keep your original PDFs separately as a backup. This build is unsigned, so Windows may show an unknown-publisher or SmartScreen prompt.
+
+**The desktop shelf is separate from the Chrome shelf.** Open your original PDF files in the desktop app to add them there; Chrome's books and bookmarks are not automatically migrated or changed.
+
+### Existing browser version
+
+Double-click **Start Folio.cmd** in this source folder, or an existing Folio shortcut pointing to that launcher. It requires Node.js, starts a server at **http://127.0.0.1:4173/** and opens Chrome. Keep the source folder in place if you use that shortcut.
 
 Open the app through the launcher or that web address. Opening `index.html` directly from File Explorer cannot run the reader; it now shows a small launch card with the working address and instructions.
 
@@ -25,7 +33,7 @@ There is an original eight-page reading sample on the welcome screen. **My shelf
 
 ## Local storage and limits
 
-PDF bytes, automatic Contents, bookmarks and reading position are saved in IndexedDB in the current browser profile. Preferences use localStorage. No account, upload server, analytics, external fonts or cloud API. The static server only serves the built app and bundled assets, and binds to loopback. It has no PDF-upload endpoint. Imported PDF content is rendered as plain text; PDF.js and its worker, fonts, character maps and WASM assets are bundled locally.
+PDF bytes, automatic Contents, bookmarks and reading position are saved in IndexedDB in the current Folio or browser profile. Preferences use localStorage. No account, upload server, analytics, external fonts or cloud API. The desktop app serves only bundled files through a private `folio://app/` protocol, with a sandboxed renderer and no Node.js access from the page. The browser version's static server only serves the built app and bundled assets, and binds to loopback. It has no PDF-upload endpoint. Imported PDF content is rendered as plain text; PDF.js and its worker, fonts, character maps and WASM assets are bundled locally.
 
 Scrolling uses Chrome's native motion, with at most seven mounted book pages or four original pages, two page-loading jobs per scroll controller, and a six-entry extracted-text cache. Each PDF canvas is capped at two million pixels; departed renders are cancelled and canvases released. The UI updates once per animation frame, and position writes are delayed until scrolling pauses for 650 ms. Progress and Contents metadata live in the small `folio-reading-places` database; scroll saves never read or rewrite the PDF bytes in `folio-library`. Existing shelf records remain readable without an upgrade. These are bounded resources, not a measured whole-browser memory ceiling: PDF.js and Chrome also maintain their own caches. No new dependency or remote asset was added for scrolling or the theme.
 
@@ -50,7 +58,26 @@ intact. Complex tables, equations and unsupported writing directions still need
 Original PDF. See [the implementation and validation report](docs/layout-interpretation.md)
 for the schema, supported cases, migration limits and measured results.
 
-Requires Node.js **22.13+** (tested with 22.21.0) and npm. PDF.js is pinned to 6.3.289; Vite is pinned to 7.3.6.
+Requires Node.js **22.13+** (tested with 22.21.0) and npm. PDF.js is pinned to 6.3.289; Vite is pinned to 7.3.7.
+
+### Build the desktop executable
+
+```powershell
+npm ci
+npm run desktop       # Build and launch a development desktop window
+npm run dist:win      # Build release/Folio-1.0.0-Windows-x64.exe
+```
+
+The desktop build uses pinned Electron and electron-builder versions and works on Windows or Linux. The first build downloads the required runtime and packaging tools; subsequent app launches work offline. `electron-builder.json` controls the package, and only the production web assets and `desktop/` entry point are included. The Windows executable has Folio's icon and version metadata; code signing is disabled because no signing certificate is configured. `npm run dist:linux` also creates a Linux x64 archive.
+
+```powershell
+npm test
+npm run test:desktop
+```
+
+The desktop smoke test uses a disposable profile, checks Book-view turns and source-anchor restoration after restart, imports the sample and Hamlet PDFs, renders an original PDF page, and verifies the shelf, reading position and bookmark after another full restart. It never uses your own shelf. Set `FOLIO_EXECUTABLE` to an absolute path to an unpacked desktop executable to test the packaged app; the portable launcher does not forward the debugger pipe used by this harness. On a Linux runner without a display, set `FOLIO_HEADLESS=1`; restricted containers that cannot start Chromium's OS sandbox can additionally use `FOLIO_TEST_NO_SANDBOX=1` for that test run only. Normal launches retain the renderer sandbox.
+
+### Browser development
 
 ```powershell
 npm ci
@@ -68,6 +95,14 @@ npm start
 `npm run build` bundles the app, copies PDF auxiliary assets, generates a complete offline asset list and versions the service-worker cache. `npm start` serves only `dist/`. The first production visit caches the assets for offline use; refresh after rebuilding. Dependencies are already installed and the production build is present on this machine. Source changes remain local until deliberately committed and published.
 
 ## Verification
+
+Desktop packaging, 2026-10-24:
+
+- All **143 Node tests** pass, including custom-protocol MIME types, invalid origins, traversal, symlink containment when supported, read-only access, and optimized pagination regressions.
+- The development and unpacked Windows desktop runtimes passed renderer isolation, Book-view forward/reverse turns and source-anchor restoration, PDF import, original-page rendering, bookmarks and shelf persistence across full restarts, using disposable profiles with the normal renderer sandbox enabled.
+- The actual Windows x64 portable executable passed bundled/file PDF import, original-page rendering, Book-view turns and source-anchor restoration, bookmarks and shelf persistence across two full restarts. This check connected through a loopback browser debugging port because the portable launcher does not forward the Electron harness's debugger pipe; normal launches enable no debugging port.
+- Both isolated browser fixtures (`tests/page-flip-check.html` and `tests/layout-check.html`) pass, covering desktop/phone pagination, cancellation, resize, typography, saved metadata, source-anchor migration and Original PDF rendering.
+- Vite was updated to the compatible 7.3.7 patch; `npm audit` reports zero vulnerabilities.
 
 Manual Contents editing and suggestion actions were removed on October 22, 2026.
 Older validation notes below describe historical features, not current controls.

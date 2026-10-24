@@ -1208,6 +1208,13 @@ window.addEventListener('beforeinstallprompt', event => { event.preventDefault()
 $('launch-help').addEventListener('click', () => {
   if (importing) return;
   const content = el('div');
+  if (location.protocol === 'folio:') {
+    content.append(el('p', 'modal-copy', 'Open Folio whenever you want a little room to read. No browser, local server, or internet connection is needed.'));
+    content.append(el('p', 'modal-copy', 'Your PDFs, bookmarks, and reading positions stay in Folio on this computer, even when you close the window. Keep your original PDFs as a backup.'));
+    content.append(el('p', 'inline-note', 'The desktop app has its own shelf. To read books from the Chrome version here, open the original PDF files in Folio.'));
+    showModal('Your own reading corner', content);
+    return;
+  }
   content.append(el('p', 'modal-copy', 'Keep your reading room close at hand.'));
   const list = el('ol', 'modal-copy');
   ['Double-click “Start Folio.cmd” in the app folder. It starts the local reader and opens Chrome.', 'Run “Create shortcut.cmd” once to put a Folio launcher on your Desktop. It starts the server for you each time.', 'In Chrome, you can also bookmark this page or install Folio from the browser menu when available.'].forEach(text => list.append(el('li', '', text)));
@@ -1226,7 +1233,7 @@ async function start() {
   await refreshShelf();
   if (active !== 'demo' && shelf.some(item => item.id === active)) await loadStored(active);
   starting = false;
-  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  if (import.meta.env.PROD && ['http:', 'https:'].includes(location.protocol) && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 }
