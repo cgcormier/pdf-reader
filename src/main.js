@@ -7,6 +7,7 @@ import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection 
 import { createPageScroller } from './page-scroll.js';
 import { turnPages } from './page-turn.js';
 import { paginateText, createBookPager } from './book-pagination.js';
+import { createSpreadBuffer } from './spread-buffer.js';
 import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
 import { resolveReadingPosition, readingPosition, paginateLayout, renderLayout, renderAnnotations } from './layout-reading.js';
 import { preference, savePreference, getBook, putBook, updateBook, deleteBook, listBooks } from './storage.js';
@@ -22,7 +23,14 @@ let pagedRenderController = null;
 let turnController = null;
 let pageFillPromise = Promise.resolve();
 let fittedSpread = null;
+let spreadPreparation = null;
+let spreadWarmup = null;
 const fragmentCache = new Map();
+let fragmentCharacters = 0;
+const fragmentCharacterBudget = 250_000;
+let contentsSnapshot = null;
+let highlightedContents = new Set();
+const contentsLinks = new Map();
 let resizeTimer;
 let scrollSaveTimer = null;
 let epoch = 0;
@@ -178,7 +186,11 @@ function currentChapter(page = book.page) {
   return book.chapters.filter(chapter => chapter.page <= page).at(-1) || book.chapters[0];
 }
 function contentsNodes() {
-  return structureNodes(book.structure || structureFromLegacy(book.chapters, pageCount()), pageCount());
+  if (!contentsSnapshot || contentsSnapshot.structure !== book.structure || contentsSnapshot.chapters !== book.chapters || contentsSnapshot.count !== pageCount()) {
+    contentsSnapshot = { structure: book.structure, chapters: book.chapters, count: pageCount(),
+      nodes: structureNodes(book.structure || structureFromLegacy(book.chapters, pageCount()), pageCount()) };
+  }
+  return contentsSnapshot.nodes;
 }
 function ensureStructure() {
   book.structure ||= structureFromLegacy(book.chapters, pageCount());
@@ -307,6 +319,7 @@ function updateContents() {
   const focused = document.activeElement?.dataset?.contentsFocus;
   const scrollTop = $('chapter-list').scrollTop;
   const fragment = document.createDocumentFragment();
+  contentsLinks.clear();
   const append = (parentId, host, depth = 0) => {
     const list = el('ul', 'contents-list');
     for (const node of nodes.filter(entry => entry.parentId === parentId)) {
@@ -326,6 +339,7 @@ function updateContents() {
         row.append(toggle);
       } else row.append(el('span', 'contents-disclosure-spacer'));
       const link = button('', 'chapter-link structure-link', () => navigateStructure(node));
+      contentsLinks.set(node.id, link);
       link.dataset.nodeId = node.id; link.dataset.contentsFocus = node.id; link.dataset.page = node.page;
       link.classList.toggle('active', node.id === active?.id);
       if (node.id === active?.id) link.setAttribute('aria-current', 'location');
@@ -343,6 +357,8 @@ function updateContents() {
   append(null, fragment);
   if (!nodes.length) fragment.append(el('p', 'inline-note', 'Finding the document’s headings…'));
   $('chapter-list').replaceChildren(fragment);
+  highlightedContents = path;
+  $('current-chapter').dataset.activeId = active?.id || '';
   $('chapter-list').scrollTop = scrollTop;
   if (focused) [...$('chapter-list').querySelectorAll('[data-contents-focus]')].find(node => node.dataset.contentsFocus === focused)?.focus({ preventScroll: true });
   $('book-title').textContent = book.title;
@@ -371,7 +387,7 @@ function updateControls() {
   $('progress-slider').value = book.page;
   $('progress-slider').setAttribute('aria-valuetext', end > book.page ? `PDF pages ${book.page} to ${end} of ${count}` : `PDF page ${book.page}${continued ? ', continued' : ''} of ${count}`);
   const atEnd = fitted ? fitted.next === null : navigation.end === count;
-  const sourceLength = fragmentCache.get(book.page)?.at(-1)?.end || 1;
+  const sourceLength = fragmentCache.get(book.page)?.at(-1)?.end || fitted?.leaves[0]?.layout?.projection.text.length || 1;
   const fraction = fitted ? Math.min(1, (book.bookPosition?.offset || 0) / sourceLength) : 0;
   const percent = atEnd ? 100 : fitted ? Math.floor((book.page - 1 + fraction) / count * 100) : Math.round((book.page - 1) / Math.max(1, count - 1) * 100);
   $('progress-percent').textContent = `${percent}%`;
@@ -400,9 +416,13 @@ function updateControls() {
   $('navigation-hint').textContent = layout === 'scroll' ? 'Scroll at your own pace · S to flip' : mode === 'book' ? flipHint : '← → for pages · S to scroll';
   $('save-status').textContent = saved ? 'Your place is kept, automatically.' : 'Reading now. Local saving is unavailable.';
 }
-async function persist() {
+async function persist({ positionOnly = false } = {}) {
   const id = book.id;
-  const metadata = structuredClone({ page: book.page, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
+  // A completed flip need not synchronously clone the whole Contents snapshot.
+  // Demo preferences replace their record, so continue saving its full metadata.
+  const metadata = structuredClone(positionOnly && id !== 'demo'
+    ? { page: book.page, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition }
+    : { page: book.page, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
   savePreference('active-book', id);
   if (id === 'demo') {
     saved = savePreference('demo', metadata);
@@ -430,32 +450,72 @@ function updateReadingPosition() {
   const path = new Set(structurePath(nodes, chapter?.id).map(node => node.id));
   // Reveal the active branch when a page change enters a collapsed group.
   if (chapter && $('current-chapter').dataset.activeId !== chapter.id) {
-    for (const parent of structurePath(nodes, chapter.id).slice(0, -1)) book.contentsExpanded[parent.id] = true;
-    $('current-chapter').dataset.activeId = chapter.id;
-    updateContents();
+    let expanded = false;
+    for (const parent of structurePath(nodes, chapter.id).slice(0, -1)) {
+      if (book.contentsExpanded[parent.id] !== true) { book.contentsExpanded[parent.id] = true; expanded = true; }
+    }
+    if (expanded) updateContents();
   }
-  $('chapter-list').querySelectorAll('[data-node-id]').forEach(link => {
+  // Only the former/current branch can change its highlight during a turn.
+  for (const id of new Set([...highlightedContents, ...path])) {
+    const link = contentsLinks.get(id);
+    if (!link) continue;
     const active = link.dataset.nodeId === chapter?.id;
     link.classList.toggle('active', active);
     link.parentElement.classList.toggle('active-parent', !active && path.has(link.dataset.nodeId));
     if (active) link.setAttribute('aria-current', 'location');
     else link.removeAttribute('aria-current');
-  });
+  }
+  highlightedContents = path;
+  $('current-chapter').dataset.activeId = chapter?.id || '';
   $('current-chapter').textContent = chapter?.title || currentChapter().title;
   $('current-chapter').title = structurePath(nodes, chapter?.id).map(node => node.title).join(' › ');
   updateControls();
 }
 function stopReadingRender() {
+  stopSpreadWarmup();
+  spreadPreparation?.buffer.clear(); spreadPreparation = null;
   cancelPageTurn();
   scroller?.destroy(); scroller = null;
   pagedRenderController?.abort(); pagedRenderController = null;
 }
 function cancelPageTurn() {
+  stopSpreadWarmup();
   if (!turnController) return;
   turnController.abort();
   turnController = null;
   $('book-spread').setAttribute('aria-busy', 'false');
   updateControls();
+}
+function stopSpreadWarmup() {
+  if (!spreadWarmup) return;
+  if (spreadWarmup.idle) window.cancelIdleCallback(spreadWarmup.handle);
+  else clearTimeout(spreadWarmup.handle);
+  spreadWarmup = null;
+}
+function warmSpreads() {
+  stopSpreadWarmup();
+  const preparation = spreadPreparation;
+  const origin = fittedSpread;
+  const valid = () => preparation && preparation === spreadPreparation && !preparation.signal.aborted
+    && origin === fittedSpread && !turnController && document.visibilityState !== 'hidden' && !$('modal').open;
+  if (!valid()) return;
+  const work = async () => {
+    spreadWarmup = null;
+    if (!valid()) return;
+    try {
+      // Touch the previous spread before inserting a new next spread, so LRU
+      // eviction releases the distant spread rather than the one just left.
+      const previous = await preparation.pager.previous(origin.anchor, step());
+      if (valid() && (previous.page !== origin.anchor.page || previous.offset !== origin.anchor.offset)) {
+        await preparation.buffer.get(previous);
+      }
+      if (valid() && origin.next) await preparation.buffer.get(origin.next);
+    } catch { /* Speculative failure stays retryable by the next actual turn. */ }
+  };
+  spreadWarmup = typeof window.requestIdleCallback === 'function'
+    ? { idle: true, handle: window.requestIdleCallback(work, { timeout: 600 }) }
+    : { idle: false, handle: setTimeout(work, 120) };
 }
 async function pageText(number, source = pdf) {
   if (!source) return { paragraphs: demo.pages[number - 1], hasText: true };
@@ -639,6 +699,8 @@ function fittedPager({ signal, renderEpoch, source }) {
       try { data = await pageText(number, source); }
       catch { check(); return [{ start: 0, end: 0, text: '', kind: 'error' }]; }
       check();
+      // Another consumer may have finished fitting while extraction was pending.
+      if (fragmentCache.has(number)) return fragmentCache.get(number);
       let fragments;
       if (!data.hasText) fragments = [{ start: 0, end: 0, text: '', kind: 'scan' }];
       else {
@@ -668,8 +730,15 @@ function fittedPager({ signal, renderEpoch, source }) {
         } finally { host.remove(); }
       }
       check();
-      if (fragmentCache.size >= 6) fragmentCache.delete(fragmentCache.keys().next().value);
-      fragmentCache.set(number, fragments);
+      const characters = fragments.at(-1)?.end || 0;
+      if (characters <= fragmentCharacterBudget) {
+        while (fragmentCache.size >= 6 || fragmentCharacters + characters > fragmentCharacterBudget) {
+          const oldest = fragmentCache.keys().next().value;
+          fragmentCharacters -= fragmentCache.get(oldest).at(-1)?.end || 0;
+          fragmentCache.delete(oldest);
+        }
+        fragmentCache.set(number, fragments); fragmentCharacters += characters;
+      }
       return fragments;
     },
   });
@@ -693,13 +762,14 @@ function commitSpread(spread, pages, place = spread.anchor) {
   book.page = spread.anchor.page;
   // Rewrapping changes the visible leaf's start, but must not move the saved
   // text anchor backward on every font, window or focus change.
-  const sourceEnd = fragmentCache.get(book.page)?.at(-1)?.end || 0;
+  const sourceEnd = fragmentCache.get(book.page)?.at(-1)?.end ?? spread.leaves.filter(leaf => leaf.page === book.page).at(-1)?.end ?? 0;
   const offset = place.page === book.page ? Math.min(place.offset, sourceEnd) : spread.anchor.offset;
   const pageLayout = spread.leaves[0]?.layout;
   book.bookPosition = pageLayout ? readingPosition(pageLayout, book.page, offset, place) : { page: book.page, offset };
   if (contentsNodes().some(node => node.id === selectedStructureId && node.page === book.page)) book.bookPosition.contentsId = selectedStructureId;
   book.scrollPosition = { page: book.page, fraction: 0, view: mode };
   $('book-spread').replaceChildren(...pages);
+  spreadPreparation?.buffer.remember(spread.anchor, { spread, pages });
   updateReadingPosition();
 }
 async function render() {
@@ -708,6 +778,7 @@ async function render() {
   const source = pdf;
   fittedSpread = null;
   fragmentCache.clear();
+  fragmentCharacters = 0;
   updateContents();
   updateControls();
   document.body.classList.toggle('scroll-mode', layout === 'scroll');
@@ -771,6 +842,13 @@ async function render() {
   }
   $('book-spread').setAttribute('aria-busy', 'true');
   $('book-spread').replaceChildren(paperPage(book.page, 'left'));
+  const pager = fittedPager({ signal, renderEpoch, source });
+  const preparation = { pager, signal, buffer: createSpreadBuffer({ prepare: async anchor => {
+    const spread = await pager.spread(anchor, step());
+    if (signal.aborted || renderEpoch !== epoch) throw new DOMException('Reading layout changed.', 'AbortError');
+    return { spread, pages: spreadPages(spread) };
+  } }) };
+  spreadPreparation = preparation;
   pageFillPromise = (async () => {
     try {
       let anchor = readingAnchor();
@@ -780,9 +858,9 @@ async function render() {
         anchor = resolveReadingPosition(data, { ...book.bookPosition, ...anchor, ...(!book.bookPosition ? { layoutVersion: LAYOUT_VERSION } : {}) }, currentChapter(anchor.page).title);
         book.bookPosition = anchor;
       }
-      const spread = await fittedPager({ signal, renderEpoch, source }).spread(anchor, step());
+      const { spread, pages } = await preparation.buffer.get(anchor);
       if (signal.aborted || renderEpoch !== epoch) return;
-      commitSpread(spread, spreadPages(spread), anchor);
+      commitSpread(spread, pages, anchor);
       if (!starting) persist();
     } catch (error) {
       if (error.name !== 'AbortError' && renderEpoch === epoch) toast('That page needs another try. Choose a page or reopen the book.');
@@ -791,32 +869,32 @@ async function render() {
     }
   })();
   await pageFillPromise;
+  if (preparation === spreadPreparation) warmSpreads();
 }
 async function flipTo(direction) {
   if (turnController || !fittedSpread) return;
+  stopSpreadWarmup();
   const controller = new AbortController();
   turnController = controller;
   const renderEpoch = epoch;
-  const source = pdf;
   const fromAnchor = fittedSpread.anchor;
   const stage = $('book-spread');
   stage.setAttribute('aria-busy', 'true');
   updateControls();
   try {
     await pageFillPromise;
-    const pager = fittedPager({ signal: controller.signal, renderEpoch, source });
+    const preparation = spreadPreparation;
+    if (!preparation || controller.signal.aborted) return;
+    const pager = preparation.pager;
     const target = direction === 'next' ? fittedSpread.next : await pager.previous(fromAnchor, step());
     if (!target || (target.page === fromAnchor.page && target.offset === fromAnchor.offset)) return;
-    const spread = await pager.spread(target, step());
-    const pages = spreadPages(spread);
+    const { spread, pages } = await preparation.buffer.get(target);
     if (controller.signal.aborted || renderEpoch !== epoch) return;
     const result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches });
     if (result !== 'finished' || controller.signal.aborted || renderEpoch !== epoch) return;
     // Only a completed turn changes the book or its saved source-page anchor.
-    pagedRenderController?.abort();
-    pagedRenderController = controller;
     commitSpread(spread, pages);
-    persist();
+    persist({ positionOnly: true });
   } catch {
     if (!controller.signal.aborted && renderEpoch === epoch) toast('That page needs another try. Use Next or choose its page number.');
   } finally {
@@ -824,6 +902,7 @@ async function flipTo(direction) {
       turnController = null;
       stage.setAttribute('aria-busy', 'false');
       updateControls();
+      warmSpreads();
     }
   }
 }
@@ -1129,6 +1208,13 @@ window.addEventListener('beforeinstallprompt', event => { event.preventDefault()
 $('launch-help').addEventListener('click', () => {
   if (importing) return;
   const content = el('div');
+  if (location.protocol === 'folio:') {
+    content.append(el('p', 'modal-copy', 'Open Folio whenever you want a little room to read. No browser, local server, or internet connection is needed.'));
+    content.append(el('p', 'modal-copy', 'Your PDFs, bookmarks, and reading positions stay in Folio on this computer, even when you close the window. Keep your original PDFs as a backup.'));
+    content.append(el('p', 'inline-note', 'The desktop app has its own shelf. To read books from the Chrome version here, open the original PDF files in Folio.'));
+    showModal('Your own reading corner', content);
+    return;
+  }
   content.append(el('p', 'modal-copy', 'Keep your reading room close at hand.'));
   const list = el('ol', 'modal-copy');
   ['Double-click “Start Folio.cmd” in the app folder. It starts the local reader and opens Chrome.', 'Run “Create shortcut.cmd” once to put a Folio launcher on your Desktop. It starts the server for you each time.', 'In Chrome, you can also bookmark this page or install Folio from the browser menu when available.'].forEach(text => list.append(el('li', '', text)));
@@ -1147,7 +1233,7 @@ async function start() {
   await refreshShelf();
   if (active !== 'demo' && shelf.some(item => item.id === active)) await loadStored(active);
   starting = false;
-  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  if (import.meta.env.PROD && ['http:', 'https:'].includes(location.protocol) && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 }

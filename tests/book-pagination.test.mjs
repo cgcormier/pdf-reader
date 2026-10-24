@@ -126,3 +126,37 @@ test('previous moves across source-page boundaries and clamps at the first fragm
   assert.deepEqual(await pager.previous({ page: 2, offset: 2 }, 2), { page: 1, offset: 2 });
   assert.deepEqual(await pager.previous({ page: 1, offset: 0 }, 9), { page: 1, offset: 0 });
 });
+
+test('fitting a long source page never measures an enormous remaining tail', () => {
+  const text = 'word '.repeat(20000);
+  let calls = 0; let measured = 0; let largest = 0;
+  const fragments = paginateText(text, slice => {
+    calls++; measured += slice.length; largest = Math.max(largest, slice.length);
+    return slice.length <= 500;
+  });
+  assert.equal(fragments.length, 200);
+  assert.equal(fragments.map(f => f.text).join(''), text);
+  assert.ok(largest <= 1024, `largest measured slice was ${largest}`);
+  assert.ok(measured < text.length * 3, `measured ${measured} characters`);
+  assert.ok(calls < 600, `used ${calls} fit calls`);
+});
+
+test('capacity hints cannot change breaks when leaf capacity varies or glyphs do not fit', () => {
+  const text = 'A\u{1f600} word\tthen\n\nnext \u2003'.repeat(75);
+  for (const base of [0, 1, 2, 9, 31, 513, 4000]) {
+    const capacity = start => base + start % 13;
+    const fragments = paginateText(text, (slice, { start }) => [...slice].length <= capacity(start));
+    assert.equal(fragments.map(f => f.text).join(''), text);
+    for (const fragment of fragments) {
+      assert.ok(!/[\uD800-\uDBFF]$/u.test(fragment.text));
+      assert.ok(!/^[\uDC00-\uDFFF]/u.test(fragment.text));
+      // Independently enumerate fitting code points and apply the word rule.
+      const remaining = [...text.slice(fragment.start)];
+      const fitting = remaining.slice(0, capacity(fragment.start)).join('');
+      const words = [...fitting.matchAll(/\s/gu)];
+      const expected = fitting.length === text.length - fragment.start ? fitting
+        : words.length ? fitting.slice(0, words.at(-1).index + 1) : fitting || remaining[0];
+      assert.equal(fragment.text, expected);
+    }
+  }
+});

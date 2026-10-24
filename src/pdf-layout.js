@@ -380,11 +380,25 @@ export function resolveSource(projection, source) {
 
 /** Stable slices retain block identity, source lines and canonical offsets. */
 export function layoutSlice(layout, start = 0, end = layout.projection.text.length) {
-  return layout.blocks.filter(b => b.end > start && b.start < end).map(block => ({ ...block,
+  return overlapping(layout.blocks, start, end).map(block => ({ ...block,
     continued: start > block.start,
-    lines: block.lines.filter(l => l.end > start && l.start < end).map(line => ({ ...line,
+    lines: overlapping(block.lines, start, end).map(line => ({ ...line,
       text: layout.projection.text.slice(Math.max(start, line.start), Math.min(end, line.end)),
       fragmentStart: Math.max(start, line.start), fragmentEnd: Math.min(end, line.end) })) }));
+}
+
+// Projection intervals are ordered and non-overlapping. Skip the source prefix
+// in logarithmic time instead of scanning every block/line on every fit probe.
+function overlapping(entries, start, end) {
+  let low = 0; let high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (entries[middle].end <= start) low = middle + 1;
+    else high = middle;
+  }
+  const result = [];
+  for (let index = low; index < entries.length && entries[index].start < end; index++) result.push(entries[index]);
+  return result;
 }
 
 /** Adapter to the existing Contents evidence contract, preserving PDF y values. */

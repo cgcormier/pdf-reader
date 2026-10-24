@@ -16,10 +16,40 @@ function nextCodePointBoundary(text, index) {
   return index + (codePoint > 0xffff ? 2 : 1);
 }
 
-function largestFittingEnd(text, start, fits, signal) {
+function largestFittingEnd(text, start, fits, signal, hint) {
   let low = start + 1;
   let high = text.length;
   let best = start;
+
+  const measure = end => {
+    throwIfAborted(signal);
+    const result = fits(text.slice(start, end), { start, end });
+    throwIfAborted(signal);
+    return result;
+  };
+  // Bound the work by the likely leaf size, rather than rendering half of all
+  // remaining source text on the first probe. A hint is only a search bound;
+  // every final break is still measured with this leaf's actual typography.
+  let span = hint;
+  let end = safeBoundaryAtOrBefore(text, Math.min(text.length, start + span));
+  if (end <= start) end = nextCodePointBoundary(text, start);
+  if (!measure(end)) high = end - 1;
+  else {
+    best = end;
+    if (best === text.length) return best;
+    const adjacent = nextCodePointBoundary(text, best);
+    if (!measure(adjacent)) return best;
+    best = adjacent;
+    if (best === text.length) return best;
+    while (best < text.length) {
+      span = Math.max(span * 2, best - start + 1);
+      end = safeBoundaryAtOrBefore(text, Math.min(text.length, start + span));
+      if (end <= best) end = nextCodePointBoundary(text, best);
+      if (!measure(end)) { low = best + 1; high = end - 1; break; }
+      best = end;
+      if (best === text.length) return best;
+    }
+  }
 
   while (low <= high) {
     throwIfAborted(signal);
@@ -30,9 +60,7 @@ function largestFittingEnd(text, start, fits, signal) {
       continue;
     }
 
-    const fitsSlice = fits(text.slice(start, end), { start, end });
-    throwIfAborted(signal);
-    if (fitsSlice) {
+    if (measure(end)) {
       best = end;
       low = middle + 1;
     } else {
@@ -43,13 +71,10 @@ function largestFittingEnd(text, start, fits, signal) {
 }
 
 function lastWhitespaceEnd(text, start, end) {
-  let result = start;
-  for (let index = start; index < end;) {
-    const next = nextCodePointBoundary(text, index);
-    if (/\s/u.test(text.slice(index, next))) result = next;
-    index = next;
+  for (let index = end - 1; index >= start; index -= 1) {
+    if (/\s/u.test(text[index])) return index + 1;
   }
-  return result;
+  return start;
 }
 
 /** Split text into fitting, contiguous slices while preserving every source character. */
@@ -61,9 +86,11 @@ export function paginateText(text, fits, { signal } = {}) {
 
   const fragments = [];
   let start = 0;
+  let hint = 512;
   while (start < text.length) {
     throwIfAborted(signal);
-    const fittingEnd = largestFittingEnd(text, start, fits, signal);
+    const fittingEnd = largestFittingEnd(text, start, fits, signal, hint);
+    hint = Math.max(1, fittingEnd - start);
     const whitespaceEnd = fittingEnd > start ? lastWhitespaceEnd(text, start, fittingEnd) : start;
     let end = fittingEnd === text.length
       ? text.length

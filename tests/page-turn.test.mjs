@@ -34,6 +34,13 @@ class FakeElement {
     node.parentNode = this;
     return node;
   }
+  replaceChild(node, old) {
+    node.remove();
+    this.children[this.children.indexOf(old)] = node;
+    old.parentNode = null;
+    node.parentNode = this;
+    return old;
+  }
   remove() {
     if (!this.parentNode) return;
     const siblings = this.parentNode.children;
@@ -104,19 +111,24 @@ test('forward desktop turn hinges from the left with current-right front and nex
   assert.ok(layer.classList.contains('page-turn-layer'));
   assert.ok(layer.classList.contains('turn-forward'));
   assert.equal(layer.children[0].className, 'paper-page next-right page-turn-reveal');
-  assert.equal(findClass(layer, 'page-turn-front').children[0].className, 'paper-page right page-turn-copy');
-  assert.equal(findClass(layer, 'page-turn-back').children[0].className, 'paper-page next-left page-turn-copy');
-  assert.ok(f.currentRight.classList.contains('turn-origin'));
+  assert.equal(findClass(layer, 'page-turn-front').children[0].className, 'paper-page right page-turn-page');
+  assert.equal(findClass(layer, 'page-turn-back').children[0].className, 'paper-page next-left page-turn-page');
+  assert.ok(f.stage.children[1].classList.contains('turn-origin'));
   assert.deepEqual(f.animations[0].keyframes, [{ transform: 'rotateY(0deg)' }, { transform: 'rotateY(-180deg)' }]);
-  const clonedProse = findClass(findClass(layer, 'page-turn-front'), 'page-prose');
-  assert.equal(clonedProse.scrollTop, 27);
-  assert.equal(findClass(layer, 'page-turn-front').children[0].getAttribute('id'), null);
+  const movingProse = findClass(findClass(layer, 'page-turn-front'), 'page-prose');
+  assert.equal(movingProse.scrollTop, 27);
+  assert.equal(findClass(layer, 'page-turn-front').children[0], f.currentRight);
+  assert.equal(findClass(layer, 'page-turn-back').children[0], f.nextLeft);
+  assert.equal(findClass(layer, 'page-turn-front').children[0].getAttribute('id'), 'id-right');
   assert.equal(layer.inert, true);
   f.animations[0].resolve();
   assert.equal(await pending, 'finished');
   assert.deepEqual(f.stage.children, [f.currentLeft, f.currentRight]);
   assert.equal(f.currentRight.classList.contains('turn-origin'), false);
   assert.equal(f.stage.classList.contains('is-turning'), false);
+  assert.equal(f.nextLeft.parentNode, null);
+  assert.equal(f.nextRight.parentNode, null);
+  assert.equal(f.currentRight.querySelector('.page-prose').scrollTop, 27);
 });
 
 test('reverse desktop turn mirrors the hinge and reveals the destination left page', async () => {
@@ -125,9 +137,9 @@ test('reverse desktop turn mirrors the hinge and reveals the destination left pa
   const layer = f.stage.children.at(-1);
   assert.ok(layer.classList.contains('turn-backward'));
   assert.equal(layer.children[0].className, 'paper-page next-left page-turn-reveal');
-  assert.equal(findClass(layer, 'page-turn-front').children[0].className, 'paper-page left page-turn-copy');
-  assert.equal(findClass(layer, 'page-turn-back').children[0].className, 'paper-page next-right page-turn-copy');
-  assert.ok(f.currentLeft.classList.contains('turn-origin'));
+  assert.equal(findClass(layer, 'page-turn-front').children[0].className, 'paper-page left page-turn-page');
+  assert.equal(findClass(layer, 'page-turn-back').children[0].className, 'paper-page next-right page-turn-page');
+  assert.ok(f.stage.children[0].classList.contains('turn-origin'));
   assert.deepEqual(f.animations[0].keyframes, [{ transform: 'rotateY(0deg)' }, { transform: 'rotateY(180deg)' }]);
   f.animations[0].resolve();
   assert.equal(await pending, 'finished');
