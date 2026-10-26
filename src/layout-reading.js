@@ -12,6 +12,34 @@ function renderIndex(layout) {
   return renderIndexes.get(layout);
 }
 
+/** Prefer a source chapter title over an injected copy without changing offsets. */
+export function hasSourceChapterTitle(layout, title) {
+  const key = value => String(value).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const needle = key(title);
+  if (!needle) return false;
+  // A confirmed mid-page heading belongs at its source position, not at the
+  // start of that PDF page just because chapter navigation is page-based.
+  if (layout.blocks.some(block => block.role === 'heading'
+    && key(layout.projection.text.slice(block.start, block.end)) === needle)) return true;
+  let previous;
+  let previousBlock;
+  for (const block of layout.blocks.slice(0, 4)) {
+    const line = block.lines[0];
+    const text = layout.projection.text.slice(block.start, block.end);
+    // A later body mention cannot suppress the intro. Only a compact cluster
+    // of standalone opening lines can corroborate an imperfectly classified title.
+    if (block.lines.length !== 1 || text.length > 110 || line.top > layout.height * .3
+      || previous && line.top - previous.bottom > layout.bodySize * 5) break;
+    if (key(text) === needle) return true;
+    // Contents may combine a number heading and its separate source subtitle.
+    if (previousBlock?.role === 'heading'
+      && key(layout.projection.text.slice(previousBlock.start, previousBlock.end) + text) === needle) return true;
+    if (/[.!?]$/.test(text) && block.role !== 'heading') break;
+    previous = line; previousBlock = block;
+  }
+  return false;
+}
+
 /** Resolve an unversioned offset through its original, heading-dependent text. */
 export function resolveReadingPosition(data, position, chapterTitle = '') {
   if (!data.layout) return { ...position };

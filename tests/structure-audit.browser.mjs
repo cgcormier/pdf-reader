@@ -1,21 +1,21 @@
 /**
  * Real file-import/render acceptance checks, each selectable by audit issue.
- * node tests/structure-audit.browser.mjs [6|9|all]
+ * node tests/structure-audit.browser.mjs [6|9|12|all]
  * Owns a fresh retained Chrome profile and a random loopback Vite origin.
  */
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeStructurePdf } from './structure-fixture.mjs';
-import { makeProseAuditPdf, proseLines } from './audit-fixtures.mjs';
+import { makeProseAuditPdf, makeOpeningAuditPdf, proseLines } from './audit-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const issues = process.argv.slice(2).map(value => value.replace(/^#/, ''));
-const selected = !issues.length || issues.includes('all') ? ['6', '9'] : issues;
-assert.ok(selected.every(issue => ['6', '9'].includes(issue)), 'Supported issues: 6, 9, all');
+const selected = !issues.length || issues.includes('all') ? ['6', '9', '12'] : issues;
+assert.ok(selected.every(issue => ['6', '9', '12'].includes(issue)), 'Supported issues: 6, 9, 12, all');
 const artifacts = path.join(root, 'output', 'playwright', 'structure-reconciliation');
 await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
@@ -162,6 +162,100 @@ async function proseHeadings(page) {
   report.push('PASS #9: exact structural-word prose renders as paragraphs in both modes; every source line and first/last-character source mapping retained.');
 }
 
+async function openingTitles(page) {
+  for (const [name, bytes, label] of [
+    ['Bundled sample.pdf', await readFile(path.join(root, 'public', 'sample.pdf')), 'sample'],
+    ['Prefatory opening.pdf', makeOpeningAuditPdf(), 'prefatory'],
+  ]) {
+    await importPdf(page, name, bytes);
+    const original = await savedBook(page);
+    const canonical = await page.evaluate(async () => {
+      const { getBook } = await import('/src/storage.js');
+      const { openPdf } = await import('/src/pdf-engine.js');
+      const { readPageLayout } = await import('/src/pdf-layout-adapter.js');
+      const { conservation } = await import('/src/pdf-layout.js');
+      const book = await getBook(JSON.parse(localStorage.getItem('folio:active-book')));
+      const pdf = await openPdf(book.bytes.slice(0));
+      try {
+        const layout = await readPageLayout(pdf, 1);
+        return { projection: layout.projection, conservation: conservation(layout),
+          titleRole: layout.blocks.find(block => layout.projection.text.slice(block.start, block.end) === 'The First Light')?.role };
+      } finally { await pdf.loadingTask.destroy(); }
+    });
+    assert.equal(canonical.conservation.valid, true, `${label}: source conservation`);
+    if (label === 'prefatory') assert.ok(canonical.titleRole && canonical.titleRole !== 'heading', 'fixture must exercise imperfect title role');
+    const titleNode = original.structure.nodes.find(node => node.title === 'The First Light');
+    assert.ok(titleNode, `${label}: original outline title missing`);
+    for (const mode of ['pages', 'scroll']) {
+      await page.locator(`#${mode}-layout`).click();
+      await page.locator('#page-input').fill('1'); await page.locator('#page-input').press('Enter');
+      await settled(page);
+      const prose = page.locator(mode === 'pages' ? '#book-spread .paper-page[data-source-page="1"] .page-prose' : '.scroll-page[data-source-page="1"] .page-prose').first();
+      await prose.locator('.layout-block').first().waitFor();
+      const text = await prose.textContent();
+      assert.equal((text.match(/The First Light/g) ?? []).length, 1, `${label} ${mode}: duplicate opening title`);
+      assert.equal((text.match(/CHAPTER ONE/g) ?? []).length, 1, `${label} ${mode}: source chapter number lost`);
+      assert.equal(await prose.locator('.chapter-intro').count(), 0, `${label} ${mode}: injected title remains`);
+      if (label === 'prefatory') assert.ok(text.includes('An opening note'), `${mode}: prefatory text lost`);
+      if (mode === 'scroll') {
+        const rendered = (await prose.locator('.layout-block').allTextContents()).join(' ').replace(/\s+/g, ' ').trim();
+        assert.equal(rendered, canonical.projection.text.replace(/\s+/g, ' ').trim(), `${label}: body text changed`);
+        assert.deepEqual(await prose.locator('..').evaluate(node => node.layoutModel.projection), canonical.projection, `${label}: rendering changed source projection`);
+      }
+      await capture(page, '12', `${label}-${mode}`);
+    }
+    await page.locator('#pages-layout').click();
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.locator('#appearance-button').press('End');
+    await page.locator('#page-input').fill('1'); await page.locator('#page-input').press('Enter');
+    await settled(page);
+    // Walk the actual fitted leaves and compare their intervals to the canonical
+    // source; this detects dropped title/body text across continuation boundaries.
+    const fragments = [];
+    for (let turn = 0; turn < 80; turn++) {
+      await settled(page);
+      const leaf = page.locator('#book-spread > .paper-page').first();
+      if (await leaf.getAttribute('data-source-page') !== '1') break;
+      fragments.push(await leaf.locator('.layout-block').evaluateAll(blocks => blocks.map(block => ({
+        start: Number(block.dataset.layoutStart), end: Number(block.dataset.layoutEnd), text: block.textContent,
+      }))));
+      if (await page.locator('#next-page').isDisabled()) break;
+      await page.locator('#next-page').click();
+    }
+    const blocks = fragments.flat();
+    assert.ok(fragments.length > 1, `${label}: continuation pagination was not exercised`);
+    let previousEnd = 0;
+    for (const block of blocks) {
+      assert.ok(block.start >= previousEnd, `${label}: continuation repeated source text`);
+      assert.equal(canonical.projection.text.slice(previousEnd, block.start).trim(), '', `${label}: continuation skipped source text`);
+      assert.equal(block.text, canonical.projection.text.slice(block.start, block.end), `${label}: continuation changed text`);
+      previousEnd = block.end;
+    }
+    assert.equal(canonical.projection.text.slice(previousEnd).trim(), '', `${label}: continuation lost final source text`);
+    await page.locator('#previous-page').click(); await settled(page);
+    const place = await waitForBook(page, book => book.bookPosition?.offset > 0 && book.bookPosition.source);
+    const anchor = place.bookPosition;
+    await page.reload();
+    await page.waitForFunction(() => !document.querySelector('#modal').open && document.querySelector('#book-type').textContent === 'FROM YOUR SHELF');
+    await settled(page);
+    const restored = await savedBook(page);
+    assert.deepEqual(restored.bookPosition, anchor, `${label}: continuation anchor changed on reload`);
+    assert.equal(Number(await page.locator('#book-spread > .paper-page').first().getAttribute('data-text-offset')), anchor.offset, `${label}: rendered continuation not restored`);
+    assert.deepEqual(Buffer.from(restored.bytes), Buffer.from(original.bytes), `${label}: original bytes changed`);
+    await capture(page, '12', `${label}-continuation-restored`);
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await settled(page);
+    await page.locator(`[data-node-id="${titleNode.id}"]`).click(); await settled(page);
+    await waitForBook(page, book => book.bookPosition?.contentsId === titleNode.id);
+    await page.reload();
+    await page.waitForFunction(() => !document.querySelector('#modal').open && document.querySelector('#book-type').textContent === 'FROM YOUR SHELF');
+    await settled(page);
+    assert.equal(await page.locator(`[data-node-id="${titleNode.id}"]`).getAttribute('aria-current'), 'location', `${label}: selected Contents not restored`);
+    assert.equal(await page.locator('#current-chapter').textContent(), 'The First Light');
+    report.push(`PASS #12 ${label}: one source title in both layouts, chapter/body conserved, ${fragments.length} continuation leaves, saved/reloaded source anchor, Contents selection and original bytes retained.`);
+  }
+}
+
 try {
   await server.listen();
   const address = server.httpServer.address();
@@ -179,7 +273,7 @@ try {
     await page.goto(`${origin}/`);
     await page.locator('#file-input').waitFor({ state: 'attached' });
     try {
-      await ({ 6: scannerBookmarks, 9: proseHeadings }[issue])(page);
+      await ({ 6: scannerBookmarks, 9: proseHeadings, 12: openingTitles }[issue])(page);
     } catch (error) {
       await capture(page, issue, 'failure');
       throw error;

@@ -9,7 +9,7 @@ import { turnPages } from './page-turn.js';
 import { paginateText, createBookPager } from './book-pagination.js';
 import { createSpreadBuffer } from './spread-buffer.js';
 import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
-import { resolveReadingPosition, readingPosition, paginateLayout, renderLayout, renderAnnotations } from './layout-reading.js';
+import { resolveReadingPosition, readingPosition, paginateLayout, renderLayout, renderAnnotations, hasSourceChapterTitle } from './layout-reading.js';
 import { preference, savePreference, getBook, putBook, updateBook, deleteBook, listBooks } from './storage.js';
 
 const $ = id => document.getElementById(id);
@@ -585,9 +585,7 @@ function paperPage(number, side, offset = 0) {
   return page;
 }
 function prepareLayoutProse(prose, pageLayout, number) {
-  const key = value => String(value).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  const first = pageLayout.blocks[0];
-  if (first?.role === 'heading' && key(pageLayout.projection.text.slice(first.start, first.end)) === key(currentChapter(number).title)) prose.querySelector('.chapter-intro')?.remove();
+  if (hasSourceChapterTitle(pageLayout, currentChapter(number).title)) prose.querySelector('.chapter-intro')?.remove();
 }
 function appendLayoutExtras(page, pageLayout, number) {
   if (page.querySelector('.layout-source-notes') || (!pageLayout.annotations.length && !pageLayout.fallbacks.length)) return;
