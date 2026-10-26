@@ -130,6 +130,27 @@ test('structure metadata round trips and survives later progress saves without c
   assert.deepEqual(loaded.bytes, original.bytes);
 });
 
+test('each book retains its selected view and layout without changing its text anchor or PDF', async () => {
+  const id = 'view-choice';
+  await putBook({ ...original, id });
+  const bookPosition = { page: 3, offset: 145, layoutVersion: 1, source: { item: 4, offset: 9 } };
+  await updateBook(id, { bookPosition, view: 'book', readingLayout: 'pages' });
+  const start = operations.length;
+  await updateBook(id, { page: 4, view: 'original', readingLayout: 'scroll', scrollPosition: { page: 4, fraction: .4, view: 'original' } });
+  assert.ok(operations.slice(start).every(op => op.name === 'folio-reading-places'));
+  let loaded = await getBook(id);
+  assert.equal(loaded.view, 'original');
+  assert.equal(loaded.readingLayout, 'scroll');
+  assert.deepEqual(loaded.bookPosition, bookPosition);
+  assert.deepEqual(loaded.bytes, original.bytes);
+  assert.equal((await getBook(original.id)).view, undefined, 'another book retains its legacy record');
+  await updateBook(id, { bookmarks: [4] });
+  loaded = (await listBooks()).find(book => book.id === id);
+  assert.equal(loaded.view, 'original');
+  assert.equal(loaded.readingLayout, 'scroll');
+  await deleteBook(id);
+});
+
 test('later bookmark updates preserve the scroll place, and removal clears both stores', async () => {
   await updateBook(original.id, { bookmarks: [2, 4] });
   const loaded = await getBook(original.id);

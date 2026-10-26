@@ -98,7 +98,7 @@ export async function listBooks() {
 
 export async function updateBook(id, changes) {
   const allowed = new Set([
-    'page', 'bookmarks', 'chapters', 'source', 'scrollPosition', 'bookPosition',
+    'page', 'bookmarks', 'chapters', 'source', 'scrollPosition', 'bookPosition', 'view', 'readingLayout',
     'structure', 'contentsExpanded', 'scannedPages',
   ]);
   const metadata = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));

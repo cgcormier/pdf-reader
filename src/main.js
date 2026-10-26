@@ -299,7 +299,7 @@ async function navigateStructure(node) {
   if (book !== target || pdf !== source || navigationEpoch !== structureNavigationEpoch) return;
   navigate(node.page);
   selectedStructureId = node.id;
-  book.bookPosition = { page: node.page, offset, layoutVersion: LAYOUT_VERSION, contentsId: node.id };
+  if (mode === 'book') book.bookPosition = { page: node.page, offset, layoutVersion: LAYOUT_VERSION, contentsId: node.id };
   book.scrollPosition = { page: node.page, fraction, view: mode };
   if (layout === 'scroll' && scroller) scroller.jumpTo(node.page, { fraction, behavior: 'auto' });
   else if (mode === 'book' && offset > 0) render();
@@ -421,8 +421,8 @@ async function persist({ positionOnly = false } = {}) {
   // A completed flip need not synchronously clone the whole Contents snapshot.
   // Demo preferences replace their record, so continue saving its full metadata.
   const metadata = structuredClone(positionOnly && id !== 'demo'
-    ? { page: book.page, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition }
-    : { page: book.page, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
+    ? { page: book.page, view: mode, readingLayout: layout, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition }
+    : { page: book.page, view: mode, readingLayout: layout, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
   savePreference('active-book', id);
   if (id === 'demo') {
     saved = savePreference('demo', metadata);
@@ -816,9 +816,11 @@ async function render() {
         if (renderEpoch !== epoch) return;
         const changed = book.page !== position.page;
         book.page = position.page;
-        const sourcePlace = mode === 'book' ? captureScrollAnchor(position.page) : null;
-        book.bookPosition = sourcePlace ?? (book.bookPosition?.page === position.page ? book.bookPosition : { page: position.page, offset: 0, layoutVersion: LAYOUT_VERSION });
-        if (contentsNodes().some(node => node.id === selectedStructureId && node.page === position.page)) book.bookPosition.contentsId = selectedStructureId;
+        if (mode === 'book') {
+          const sourcePlace = captureScrollAnchor(position.page);
+          book.bookPosition = sourcePlace ?? (book.bookPosition?.page === position.page ? book.bookPosition : { page: position.page, offset: 0, layoutVersion: LAYOUT_VERSION });
+          if (contentsNodes().some(node => node.id === selectedStructureId && node.page === position.page)) book.bookPosition.contentsId = selectedStructureId;
+        }
         book.scrollPosition = { ...position, view: mode };
         if (changed) updateReadingPosition();
         if (!starting) scheduleScrollSave();
@@ -855,7 +857,8 @@ async function render() {
       if (source) {
         const data = await pageText(anchor.page, source);
         if (signal.aborted || renderEpoch !== epoch) return;
-        anchor = resolveReadingPosition(data, { ...book.bookPosition, ...anchor, ...(!book.bookPosition ? { layoutVersion: LAYOUT_VERSION } : {}) }, currentChapter(anchor.page).title);
+        const place = book.bookPosition?.page === anchor.page ? book.bookPosition : null;
+        anchor = resolveReadingPosition(data, { ...place, ...anchor, ...(!place ? { layoutVersion: LAYOUT_VERSION } : {}) }, currentChapter(anchor.page).title);
         book.bookPosition = anchor;
       }
       const { spread, pages } = await preparation.buffer.get(anchor);
@@ -911,7 +914,8 @@ function navigate(number) {
   cancelPageTurn();
   ++structureNavigationEpoch; selectedStructureId = null;
   book.page = number;
-  book.bookPosition = { page: number, offset: 0, layoutVersion: LAYOUT_VERSION };
+  // Original navigation has no text offset and must not erase the last Book anchor.
+  if (mode === 'book') book.bookPosition = { page: number, offset: 0, layoutVersion: LAYOUT_VERSION };
   book.scrollPosition = { page: number, fraction: 0, view: mode };
   if (layout === 'scroll' && scroller) {
     scroller.jumpTo(number, { behavior: 'auto' });
@@ -934,10 +938,12 @@ $('progress-slider').addEventListener('change', event => navigate(Number(event.t
 function setMode(value) {
   if (mode === value) return;
   flushScrollSave(); mode = value; render();
+  persist({ positionOnly: true });
 }
 function setLayout(value) {
   if (layout === value) return;
   flushScrollSave(); layout = value; savePreference('reading-layout', layout); render();
+  persist({ positionOnly: true });
 }
 $('book-view').addEventListener('click', () => setMode('book'));
 $('original-view').addEventListener('click', () => { if (pdf) setMode('original'); });
@@ -1148,10 +1154,15 @@ async function loadStored(id, page) {
     await disposePdf(pdf);
     pdf = candidate; candidate = null; book = stored;
     installed = true;
-    selectedStructureId = page ? null : stored.bookPosition?.contentsId || null;
     book.page = Math.min(pdf.numPages, Math.max(1, page || book.page || 1));
-    if (page) { book.scrollPosition = { page: book.page, fraction: 0, view: 'book' }; book.bookPosition = { page: book.page, offset: 0 }; }
-    mode = 'book'; pageCache.clear(); saved = true; bookStored = true;
+    mode = (stored.view ?? stored.scrollPosition?.view) === 'original' ? 'original' : 'book';
+    if (['pages', 'scroll'].includes(stored.readingLayout)) layout = stored.readingLayout;
+    selectedStructureId = !page && stored.bookPosition?.page === book.page ? stored.bookPosition.contentsId || null : null;
+    if (page) {
+      book.scrollPosition = { page: book.page, fraction: 0, view: mode };
+      if (mode === 'book') book.bookPosition = { page: book.page, offset: 0 };
+    }
+    pageCache.clear(); saved = true; bookStored = true;
     modalCleanup = null; $('modal').close();
     render(); persist();
   } catch (error) { if (!controller.signal.aborted) importError(error); }
@@ -1170,6 +1181,7 @@ async function useDemo() {
   book.page = Math.min(8, Math.max(1, position.page)); book.bookmarks = position.bookmarks || [];
   book.scrollPosition = position.scrollPosition;
   book.bookPosition = position.bookPosition;
+  if (['pages', 'scroll'].includes(position.readingLayout)) layout = position.readingLayout;
   savePreference('active-book', 'demo'); $('modal').close(); render();
 }
 $('library-button').addEventListener('click', async () => {
@@ -1239,6 +1251,7 @@ async function start() {
   book.page = Math.min(8, Math.max(1, position.page || 1)); book.bookmarks = position.bookmarks || [];
   book.scrollPosition = position.scrollPosition;
   book.bookPosition = position.bookPosition;
+  if (active === 'demo' && ['pages', 'scroll'].includes(position.readingLayout)) layout = position.readingLayout;
   await render();
   await refreshShelf();
   if (active !== 'demo' && shelf.some(item => item.id === active)) await loadStored(active);
