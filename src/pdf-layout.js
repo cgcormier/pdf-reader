@@ -140,6 +140,11 @@ function groupLines(runs, caps, size, width) {
 function annotationLines(lines, { width, height, pageNumber }, size) {
   const result = new Map();
   const contents = lines.some(l => /^(?:contents|table of contents)$/i.test(clean(l.text)));
+  const runningTitle = text => {
+    const letters = text.match(/\p{L}/gu) ?? [];
+    return !isHeading(text) && letters.length >= 4 && text.length <= 90 && /^\p{Lu}[\p{L}\p{M}\s’'.,:?-]*$/u.test(text)
+      && (titleCase(text) || letters.filter(letter => /\p{Lu}/u.test(letter)).length >= letters.length * .8);
+  };
   const baselines = new Map(); const numbers = new Map();
   for (const line of lines) {
     const row = Math.round(line.baseline / Math.max(1, size * .35));
@@ -158,13 +163,22 @@ function annotationLines(lines, { width, height, pageNumber }, size) {
       && (numbers.get(Math.round(line.x / size)) ?? 0) >= 2;
     const footer = numeric && Number(text) === pageNumber && line.baseline > height * .945;
     const runningPlay = /\bACT\s+[IVX\d]+[.,]?\s+(?:SC\.?|SCENE)\s*[IVX\d]+/i.test(text) && line.baseline < height * .1 && line.size < size * .9;
-    const runningTitle = value => !isHeading(clean(value.text)) && /^\p{L}[\p{L}\s’'.,-]{1,48}$/u.test(clean(value.text)) && value.size <= size * 1.2;
-    const headerPair = line.baseline < height * .08 && ((numeric && peers.some(runningTitle))
-      || runningTitle(line) && peers.some(l => /^\d{1,4}$/.test(clean(l.text))));
+    const headerBand = line.baseline < height * .055;
+    const titlePeer = value => value.size <= size * 1.2 && runningTitle(clean(value.text));
+    const folioPeer = value => /^\d{1,6}$/.test(clean(value.text)) && (value.x < width * .12 || value.right > width * .83);
+    const headerPair = headerBand && ((numeric && edge && peers.some(titlePeer))
+      || titlePeer(line) && peers.some(folioPeer));
+    const combined = text.match(/^(.*?)\s+(\d{1,6})$/u) ?? text.match(/^(\d{1,6})\s+(.*)$/u);
+    const combinedTitle = combined && (/^\d/.test(combined[1]) ? combined[2] : combined[1]);
+    // Printed folios need not equal source-page numbers. A combined row still
+    // needs margin placement, smaller type, title casing and body separation.
+    const combinedHeader = !contents && headerBand && edge && line.size < size * .98 && combinedTitle && runningTitle(combinedTitle)
+      && lines.some(other => other.baseline - line.baseline >= size && other.baseline - line.baseline <= size * 4
+        && other.size >= size * .95 && /\p{L}/u.test(other.text) && !runningTitle(clean(other.text)));
     if (/^FTLN\s*\d+/i.test(text) && edge) result.set(line.id, 'marginal-counter');
     else if (sideNumber) result.set(line.id, 'marginal-counter');
     else if (footer) result.set(line.id, 'page-footer');
-    else if (runningPlay || headerPair) result.set(line.id, 'running-header');
+    else if (runningPlay || headerPair || combinedHeader) result.set(line.id, 'running-header');
   }
   return result;
 }

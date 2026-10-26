@@ -6,7 +6,7 @@ import { extractPage } from '../src/pdf-engine.js';
 import { readPageLayout, clearPageLayouts } from '../src/pdf-layout-adapter.js';
 import { analyzeDocumentStructure } from '../src/document-structure.js';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { makeLayoutPdf, layoutPages, modestHeadingPages } from './pdf-layout-fixture.mjs';
+import { makeLayoutPdf, layoutPages, modestHeadingPages, runningHeaderPages } from './pdf-layout-fixture.mjs';
 
 const item = (str, x, y, size = 10, width = str.length * size * .45, extra = {}) => ({ str, width, transform: [size, 0, 0, size, x, y], ...extra });
 const layout = items => interpretPage({ items });
@@ -206,6 +206,59 @@ test('superscripts do not create headings and furniture does not consume top-edg
   assert.ok(result.annotations.some(a => a.projection.text === 'A Book'));
   assert.ok(result.lines.some(l => l.text === 'ACT I'));
   assert.ok(structureLines(result).filter(l => l.y < 750).every(l => l.size === 10)); valid(result);
+});
+
+for (const [index, page] of runningHeaderPages.entries()) test(`combined, split and OCR-shaped running headers retain annotation provenance (${index})`, () => {
+  const result = modestLayout(page);
+  const headerItems = page.items.length - 6;
+  assert.ok(result.annotations.length > 0);
+  assert.ok(result.annotations.every(annotation => annotation.role === 'running-header'));
+  assert.equal(text(result), page.items.slice(headerItems).map(run => run.text).join(' '));
+  for (const [itemIndex, original] of page.items.slice(0, headerItems).entries()) {
+    const annotation = result.annotations.find(annotation => annotation.lines.some(line => line.runs.some(run => run.index === itemIndex)));
+    assert.ok(annotation, original.text);
+    for (let offset = 0; offset < original.text.length; offset++) {
+      const projected = offsetForSource(annotation.projection, { item: itemIndex, offset });
+      assert.deepEqual(sourceAt(annotation.projection, projected), { item: itemIndex, offset });
+      assert.equal(annotation.projection.text[projected], original.text[offset]);
+    }
+  }
+  valid(result);
+});
+
+test('installed PDF.js isolates offset and OCR-shaped source headers without losing body text', async () => {
+  const task = getDocument({ data: makeLayoutPdf(runningHeaderPages), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    for (const [index, page] of runningHeaderPages.entries()) {
+      const result = await readPageLayout(pdf, index + 1);
+      assert.ok(result.annotations.some(annotation => annotation.role === 'running-header'));
+      assert.equal(text(result), page.items.slice(-6).map(run => run.text).join(' '));
+      assert.ok(result.lines.every(line => line.right <= result.width));
+      for (const annotation of result.annotations) for (const line of annotation.lines) {
+        for (const run of line.runs) if (run.text.trim()) {
+          const projected = offsetForSource(annotation.projection, { item: run.index, offset: 0 });
+          assert.deepEqual(sourceAt(annotation.projection, projected), { item: run.index, offset: 0 });
+        }
+      }
+      valid(result);
+    }
+  } finally { await task.destroy(); }
+});
+
+for (const [name, top] of [
+  ['sentence ending with a number', [item('The ordinary count increased to 123', 9, 413.52, 8.35, 231)]],
+  ['body-size capitalized text', [item('THUS SPOKE AN ORDINARY BODY LINE 123', 9, 413.52, 9.8, 231)]],
+  ['small title without folio', [item('THE ?ORTABLE NARRATIVE', 62, 413.52, 8.35, 122)]],
+  ['body prose beside a number', [item('The ordinary narrative continues', 62, 413.52, 8.35, 175), item('123', 9, 413.52, 8.35, 14)]],
+  ['top-edge numbered chapter', [item('Chapter I', 62, 413.52, 8.35, 100), item('123', 9, 413.52, 8.35, 14)]],
+]) test(`near-top body or structural text is retained: ${name}`, () => {
+  const page = runningHeaderPages[0];
+  const body = page.items.slice(-6).map(run => item(run.text, run.x, run.y, run.size, run.width));
+  const result = interpretPage({ items: [...top, ...body] }, { view: page.view });
+  assert.equal(result.annotations.length, 0);
+  for (const source of top) assert.ok(text(result).includes(source.str));
+  valid(result);
 });
 
 test('shared verse and stage cues retain their source sequence, including spoken numbers', () => {

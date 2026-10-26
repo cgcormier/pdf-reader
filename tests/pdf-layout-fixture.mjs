@@ -79,3 +79,19 @@ export const modestHeadingPages = [
       x: 9, y: 425.52 - (341.69 + index * 11.2), size: 9.8, width: 231 })),
   ] },
 ];
+
+// Short source headers with original prose below, including offset folios and
+// separate PDF runs/lines. Only classification may change the display stream.
+export const runningHeaderPages = [
+  [{ text: 'THUS SPOKE ZARATHUSTRA: FIRST PART 123', x: 31.32, y: 413.1, size: 8.35, width: 210.4 }],
+  [{ text: 'THUS SPOKE ZARATHUSTRA: nRST P.ART', x: 31.2, y: 412.66, size: 7.3, width: 186.88 },
+    { text: '121', x: 226.13, y: 412.66, size: 7.3, width: 13.08 }],
+  [{ text: '124', x: 9.45, y: 413.75, size: 8.85, width: 13.01 },
+    { text: 'THE ?ORTABLE NIETZSCHE', x: 62.64, y: 413.75, size: 8.35, width: 121.45 }],
+  [{ text: 'THUS SPOKE ZARATH USTRA: FIRST PART', x: 31.44, y: 413.52, size: 8, width: 187.24 },
+    { text: '137', x: 227.45, y: 413.52, size: 8.85, width: 13.39 }],
+  [{ text: '124 THE ?ORTABLE NIETZSCHE', x: 9.45, y: 413.75, size: 8.35, width: 175 }],
+].map(headers => ({ view: [0, 0, 248.4, 425.52], items: [...headers,
+  ...Array.from({ length: 6 }, (_, index) => ({ text: `The ordinary narrative continues across this page ${index + 1}.`,
+    x: 9, y: 425.52 - (25.95 + index * 11.2), size: 9.8, width: 231 })),
+] }));

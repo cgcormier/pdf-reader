@@ -1,7 +1,7 @@
 /**
  * Real file-import/render acceptance checks, each selectable by audit issue.
- * node tests/structure-audit.browser.mjs [6|9|10|12|13|all]
- * Owns a fresh retained Chrome profile and a random loopback Vite origin.
+ * node tests/structure-audit.browser.mjs [6|9|10|11|12|13|all]
+ * Owns a fresh retained Chrome profile and an available loopback Vite origin.
  */
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -10,13 +10,13 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeStructurePdf } from './structure-fixture.mjs';
-import { makeLayoutPdf, modestHeadingPages } from './pdf-layout-fixture.mjs';
+import { makeLayoutPdf, modestHeadingPages, runningHeaderPages } from './pdf-layout-fixture.mjs';
 import { makeProseAuditPdf, makeOpeningAuditPdf, proseLines } from './audit-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const issues = process.argv.slice(2).map(value => value.replace(/^#/, ''));
-const selected = !issues.length || issues.includes('all') ? ['6', '9', '10', '12', '13'] : issues;
-assert.ok(selected.every(issue => ['6', '9', '10', '12', '13'].includes(issue)), 'Supported issues: 6, 9, 10, 12, 13, all');
+const selected = !issues.length || issues.includes('all') ? ['6', '9', '10', '11', '12', '13'] : issues;
+assert.ok(selected.every(issue => ['6', '9', '10', '11', '12', '13'].includes(issue)), 'Supported issues: 6, 9, 10, 11, 12, 13, all');
 const artifacts = path.join(root, 'output', 'playwright', 'structure-reconciliation');
 await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
@@ -207,6 +207,8 @@ async function openingTitles(page) {
     }
     await page.locator('#pages-layout').click();
     await page.setViewportSize({ width: 320, height: 640 });
+    // Resizing schedules a debounced render; begin turns after it has settled.
+    await new Promise(resolve => setTimeout(resolve, 200));
     await page.locator('#appearance-button').press('End');
     await page.locator('#page-input').fill('1'); await page.locator('#page-input').press('Enter');
     await settled(page);
@@ -245,6 +247,7 @@ async function openingTitles(page) {
     assert.deepEqual(Buffer.from(restored.bytes), Buffer.from(original.bytes), `${label}: original bytes changed`);
     await capture(page, '12', `${label}-continuation-restored`);
     await page.setViewportSize({ width: 1440, height: 960 });
+    await new Promise(resolve => setTimeout(resolve, 200));
     await settled(page);
     await page.locator(`[data-node-id="${titleNode.id}"]`).click(); await settled(page);
     await waitForBook(page, book => book.bookPosition?.contentsId === titleNode.id);
@@ -394,6 +397,69 @@ async function chapterReconciliation(page) {
   }
 }
 
+async function sourceHeaders(page) {
+  await importPdf(page, 'Running source headers.pdf', makeLayoutPdf(runningHeaderPages));
+  const models = await page.evaluate(async () => {
+    const { getBook } = await import('/src/storage.js');
+    const { openPdf } = await import('/src/pdf-engine.js');
+    const { readPageLayout } = await import('/src/pdf-layout-adapter.js');
+    const { conservation, sourceAt, offsetForSource } = await import('/src/pdf-layout.js');
+    const book = await getBook(JSON.parse(localStorage.getItem('folio:active-book')));
+    const pdf = await openPdf(book.bytes.slice(0)); const models = [];
+    try {
+      for (let number = 1; number <= pdf.numPages; number++) {
+        const layout = await readPageLayout(pdf, number);
+        models.push({ text: layout.projection.text, conservation: conservation(layout),
+          annotations: layout.annotations.map(annotation => ({ text: annotation.projection.text,
+            role: annotation.role, sourceLine: annotation.associatedLine,
+            runs: annotation.lines.flatMap(line => line.runs).filter(run => run.text.trim()).map(run => {
+              const first = offsetForSource(annotation.projection, { item: run.index, offset: 0 });
+              const last = offsetForSource(annotation.projection, { item: run.index, offset: run.text.length - 1 });
+              return { item: run.index, text: run.text,
+                first: sourceAt(annotation.projection, first), last: sourceAt(annotation.projection, last),
+                retained: annotation.projection.text.slice(first, last + 1) };
+            }) })) });
+      }
+      return models;
+    } finally { await pdf.loadingTask.destroy(); }
+  });
+  for (const [index, model] of models.entries()) {
+    assert.equal(model.conservation.valid, true, `page ${index + 1}: source conservation`);
+    assert.equal(model.text, runningHeaderPages[index].items.slice(-6).map(item => item.text).join(' '));
+    assert.ok(model.annotations.length && model.annotations.every(annotation => annotation.role === 'running-header'));
+    for (const annotation of model.annotations) for (const run of annotation.runs) {
+      assert.deepEqual(run.first, { item: run.item, offset: 0 });
+      assert.deepEqual(run.last, { item: run.item, offset: run.text.length - 1 });
+      assert.equal(run.retained, run.text, 'header source text changed');
+    }
+    for (const header of runningHeaderPages[index].items.slice(0, -6)) {
+      assert.ok(model.annotations.some(annotation => annotation.text.includes(header.text)), 'original header missing from source annotations');
+    }
+  }
+  for (const mode of ['pages', 'scroll']) {
+    await page.locator(`#${mode}-layout`).click(); await settled(page);
+    for (const [index, model] of models.entries()) {
+      const number = index + 1;
+      await page.locator('#page-input').fill(String(number)); await page.locator('#page-input').press('Enter');
+      await settled(page);
+      const paper = page.locator(mode === 'pages' ? `#book-spread > .paper-page[data-source-page="${number}"]` : `.scroll-page[data-source-page="${number}"]`).first();
+      await paper.locator('.layout-block').first().waitFor();
+      const prose = (await paper.locator('.page-prose .layout-block').allTextContents()).join(' ').replace(/\s+/g, ' ').trim();
+      assert.equal(prose, model.text, `${mode} page ${number}: header leaked or body prose lost`);
+      assert.doesNotMatch(prose, /THUS SPOKE|FIRST PART|nRST P\.ART|\?ORTABLE|ZARATH USTRA|\b12[134]\b|\b137\b/);
+      await paper.locator('.layout-source-notes').click();
+      await page.locator('#modal[open] .layout-annotations').waitFor();
+      await page.locator('#modal .layout-annotations summary').click();
+      assert.deepEqual(await page.locator('#modal .layout-annotations p').allTextContents(), model.annotations.map(annotation => annotation.text), `${mode} page ${number}: Source notes text changed`);
+      assert.deepEqual(await page.locator('#modal .layout-annotations p').evaluateAll(notes => notes.map(note => note.dataset.sourceLine)), model.annotations.map(annotation => annotation.sourceLine ?? ''), `${mode}: source note association changed`);
+      if (number === 4) await capture(page, '11', `${mode}-source-notes`);
+      await page.locator('#modal-close').click();
+    }
+    await capture(page, '11', mode);
+  }
+  report.push('PASS #11: five combined, split, OCR-shaped and offset source headers remain out of prose in both layouts; exact body and Source notes text, associations and header source endpoint maps retained.');
+}
+
 try {
   await server.listen();
   const address = server.httpServer.address();
@@ -411,7 +477,7 @@ try {
     await page.goto(`${origin}/`);
     await page.locator('#file-input').waitFor({ state: 'attached' });
     try {
-      await ({ 6: scannerBookmarks, 9: proseHeadings, 10: modestHeadings, 12: openingTitles, 13: chapterReconciliation }[issue])(page);
+      await ({ 6: scannerBookmarks, 9: proseHeadings, 10: modestHeadings, 11: sourceHeaders, 12: openingTitles, 13: chapterReconciliation }[issue])(page);
     } catch (error) {
       await capture(page, issue, 'failure');
       throw error;
