@@ -27,6 +27,13 @@ requires compatible ordinals, region, alignment and destination geometry;
 distinct same-page headings remain separate. Scroll restoration measures loaded
 pages before resolving source anchors, avoiding drift from estimated page heights.
 
+Combined or split running headers use margin placement, casing and folio
+evidence independently of the physical page number. Recognized OCR-shaped
+headers remain inspectable in Source notes with their original text and source
+ranges. Nearby body prose and ambiguous standalone titles remain in the reading
+stream. See [the batch-two audit report](structure-reconciliation.md) for
+issue-level commits, fixtures and actual-document verification.
+
 ## October 23 review fixes
 
 Detector snapshots used version 5. Printed Contents detection accepts numbered
