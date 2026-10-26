@@ -18,7 +18,21 @@ export function inversePoint(m, x, y) {
 }
 const bounds = runs => ({ x: Math.min(...runs.map(r => r.x)), right: Math.max(...runs.map(r => r.right)),
   top: Math.min(...runs.map(r => r.top)), bottom: Math.max(...runs.map(r => r.bottom)) });
-const isHeading = text => /^(?:(?:act|scene)\s+(?:[ivxlcdm]+|\d+)\.?|(?:part|chapter|book|section|appendix)\s+\S+.*|\d+(?:\.\d+)+\s+.+|preface|contents|table of contents)$/i.test(text);
+const writtenNumber = '(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?)';
+const writtenHeadingNumber = new RegExp(`^${writtenNumber}$`, 'i');
+const numberedHeading = new RegExp(`^(part|chapter|book|section|appendix)\\s+(${writtenNumber}|\\d+(?:\\.\\d+)*|[ivxlcdm]+|[a-z])(?=$|[\\s:.,–—-])`, 'i');
+const isHeading = text => {
+  if (/^(?:(?:act|scene)\s+(?:[ivxlcdm]+|\d+)\.?|\d+(?:\.\d+)+\s+.+|preface|contents|table of contents)$/i.test(text)) return true;
+  const match = text.match(numberedHeading);
+  if (!match) return false;
+  const number = match[2];
+  // A prose word after "part" or "book" supplies no structural evidence.
+  // Validate whole Roman tokens too: words such as "civil" use Roman letters.
+  return /^\d/.test(number) || writtenHeadingNumber.test(number)
+    || /^[ivxlcdm]+$/i.test(number) && /^(?=.)M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$/i.test(number)
+    || /^appendix$/i.test(match[1]) && /^[a-z]$/i.test(number)
+    || /^section$/i.test(match[1]) && /^[A-Z]$/.test(number);
+};
 const speakerMatch = text => {
   const match = text.match(/^([\p{Lu}][\p{Lu}\p{M}’'.-]*(?:\s+[\p{Lu}][\p{Lu}\p{M}’'.-]*){0,2})(?:\s+|$)/u);
   if (!match) return null;

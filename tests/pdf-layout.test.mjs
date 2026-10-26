@@ -90,6 +90,41 @@ test('indent changes, paragraph gaps and centered headings remain explicit', () 
   assert.ok(result.blocks.length >= 3); assert.ok(result.blocks.some(b => b.indent > 0)); valid(result);
 });
 
+test('structural words in wrapped prose do not invent headings or break paragraph flow', () => {
+  const source = ['The preceding body line continues into this', 'part of their load and help them to bear it-that will',
+    'book of stories and ordinary examples remains body text.', 'section of the narrative continues at the same measure.',
+    'section a reader remembers is still ordinary prose.',
+    'chapter about an ordinary afternoon continues here.', 'appendix of supporting material is mentioned in prose.',
+    'book civil life describes is still an ordinary sentence.'];
+  const result = layout(source.map((str, index) => item(str, 40, 700 - index * 14, 10, 440)));
+  assert.equal(result.blocks.length, 1);
+  assert.equal(result.blocks[0].role, 'paragraph');
+  assert.equal(text(result), source.join(' '));
+  for (const [index, str] of source.entries()) {
+    const offset = text(result).indexOf(str);
+    assert.deepEqual(sourceAt(result.projection, offset), { item: index, offset: 0 });
+    assert.equal(offsetForSource(result.projection, { item: index, offset: str.length - 1 }), offset + str.length - 1);
+  }
+  valid(result);
+});
+
+for (const title of ['Chapter One', 'PART TWENTY-ONE', 'Book 2: An Opening', 'Section 2.3 A New Topic',
+  'Chapter IV', 'Part xii', 'Section A', 'Section B: Scope', 'Appendix A', 'Appendix III']) test(`numbered heading retains its role: ${title}`, () => {
+  const result = layout([item(title, 40, 730), item('Ordinary body prose establishes the page measure.', 40, 690, 10, 440)]);
+  assert.equal(result.blocks[0].role, 'heading');
+  assert.equal(result.lines[0].text, title);
+  assert.deepEqual(sourceAt(result.projection, 0), { item: 0, offset: 0 });
+  valid(result);
+});
+
+test('unnumbered structural titles can still use validated tags or prominent typography', () => {
+  const prominent = layout([item('Book of Stories', 40, 730, 18), item('Ordinary body prose establishes the page measure.', 40, 690, 10, 440)]);
+  assert.equal(prominent.blocks[0].role, 'heading'); valid(prominent);
+  const tagged = interpretPage({ items: [{ type: 'beginMarkedContentProps', id: 'title' }, item('Book of Stories', 40, 730),
+    { type: 'endMarkedContent' }] }, { structTree: { role: 'H1', children: [{ type: 'content', id: 'title' }] } });
+  assert.equal(tagged.tags.status, 'validated'); assert.equal(tagged.blocks[0].role, 'heading'); valid(tagged);
+});
+
 test('neutral verse keeps source lines and stanza gaps without freezing prose', () => {
   const result = layout([item('Across the quiet road', 40, 700), item('We carry borrowed light', 60, 685), item('And wait beside the gate', 40, 670),
     item('Another stanza begins', 40, 630), item('A second line returns', 60, 615), item('The final line remains', 40, 600)].map(run => ({ ...run, hasEOL: true })));
