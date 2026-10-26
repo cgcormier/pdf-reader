@@ -272,6 +272,10 @@ body:not(.scroll-mode) .app-footer { min-height: 32px; }
 .scroll-original { background: #f1eadc; }
 .scroll-canvas-host { display: grid; place-items: center; width: 100%; min-height: 420px; }
 .scroll-canvas-host canvas { display: block; width: 100%; height: auto; background: #faf6eb; box-shadow: 0 2px 12px rgba(57, 43, 32, .12); }
+/* A scanned leaf uses its full reading area while retaining source navigation. */
+.scan-page:not(.scroll-page) .page-prose { display: flex; }
+.scan-page:not(.scroll-page) .scroll-canvas-host { min-height: 0; height: 100%; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+.scan-page:not(.scroll-page) canvas { width: 100%; height: 100%; object-fit: contain; box-shadow: none; }
 .scroll-loading { display: grid; place-items: center; width: 100%; min-height: 360px; color: var(--ink-faint); background: linear-gradient(100deg, rgba(128, 85, 58, .035), rgba(250, 246, 235, .8), rgba(128, 85, 58, .035)); font: italic 15px var(--serif); }
 .scroll-error { padding: 24px; color: var(--ink-soft); text-align: center; font: 15px/1.6 var(--serif); }
 .scroll-error .scroll-retry { margin-top: 12px; }

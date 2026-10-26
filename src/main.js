@@ -49,6 +49,9 @@ let structureNavigationEpoch = 0;
 const appearance = preference('appearance', { size: 17, paper: 'light' });
 const roman = n => ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'][n - 1] || String(n);
 const pageCount = () => pdf?.numPages || demo.pages.length;
+const hasNoReadableText = () => pdf && book.structure?.version === STRUCTURE_VERSION && book.structure.status === 'complete'
+  && book.structure.textPages === 0 && !book.structure.failedPages?.length
+  && book.structure.scannedPages?.length === pdf.numPages;
 const disposePdf = document => document?.loadingTask?.destroy();
 const step = () => layout === 'scroll' || mode === 'original' || smallScreen.matches ? 1 : 2;
 const el = (tag, className, text) => {
@@ -213,6 +216,8 @@ async function startStructureScan(fresh = false) {
       if (book !== target || pdf !== source) return;
       target.structure = snapshot;
       target.scannedPages = snapshot.scannedPages.length;
+      // Only a complete, successful scan can rule out text in later pages.
+      if (mode === 'book' && hasNoReadableText()) setMode('original');
       updateContents(); updateReadingPosition(); persist();
     },
     onError: () => {
@@ -365,6 +370,8 @@ function updateContents() {
   $('book-author').textContent = book.author || `${pageCount()} pages · Your personal edition`;
   $('book-type').textContent = book.id === 'demo' ? 'A FOLIO ORIGINAL' : 'FROM YOUR SHELF';
   $('original-view').disabled = !pdf;
+  $('book-view').disabled = Boolean(hasNoReadableText());
+  $('book-view').title = hasNoReadableText() ? 'This PDF has no readable text layer. Use Original PDF.' : '';
   $('chapter-note').textContent = structureStatus();
   $('chapter-note').setAttribute('role', 'status');
   updateStructureTools();
@@ -611,9 +618,7 @@ async function fillPaperPage(number, page, { signal, renderEpoch, source }) {
     const data = await pageText(number, source);
     if (signal.aborted || renderEpoch !== epoch) return;
     if (!data.hasText) {
-      const notice = el('div', 'scanned-message');
-      notice.append(el('p', '', 'This page is better seen in its original form.'), el('p', 'inline-note', 'It may be a scan, illustration, or a page without readable text.'), button('View original page ↗', 'secondary-button', () => { flushScrollSave(); book.page = number; book.scrollPosition = { page: number, fraction: 0, view: 'original' }; mode = 'original'; render(); persist(); }));
-      prose.append(notice);
+      await fillScannedPage(number, page, { signal, renderEpoch, source });
     } else {
       const chapter = currentChapter(number);
       const paragraphs = source && chapter.page === number ? removeRepeatedChapterHeading(data.paragraphs, chapter.title) : data.paragraphs;
@@ -643,6 +648,12 @@ function originalScrollPage(number) {
   page.append(heading, host, el('div', 'page-number', number));
   return page;
 }
+async function fillScannedPage(number, page, context) {
+  page.classList.add('scan-page');
+  const host = el('div', 'scroll-canvas-host');
+  page.querySelector('.page-prose').replaceChildren(host);
+  await fillOriginalPage(number, page, context);
+}
 async function fillOriginalPage(number, page, { signal, renderEpoch, source }) {
   const host = page.querySelector('.scroll-canvas-host');
   const canvas = el('canvas');
@@ -664,11 +675,7 @@ function fillFragment(page, fragment) {
   const prose = page.querySelector('.page-prose');
   const intro = prose.querySelector('.chapter-intro');
   prose.replaceChildren(...(intro ? [intro] : []));
-  if (fragment.kind === 'scan') {
-    const notice = el('div', 'scanned-message');
-    notice.append(el('p', '', 'This page is better seen in its original form.'), button('View original page ↗', 'secondary-button', () => { navigate(fragment.page); setMode('original'); }));
-    prose.append(notice);
-  } else if (fragment.kind === 'error') {
+  if (fragment.kind === 'error') {
     prose.append(el('p', '', 'This page needs another try.'), button('Try again', 'secondary-button', () => { pageCache.delete(fragment.page); render(); }));
   } else if (fragment.kind === 'overflow') {
     prose.append(el('p', 'inline-note', 'This leaf is too small for the source text.'), button('View original page ↗', 'secondary-button', () => { navigate(fragment.page); setMode('original'); }));
@@ -747,13 +754,14 @@ function readingAnchor() {
   const place = book.bookPosition;
   return { page: book.page, offset: place?.page === book.page && Number.isFinite(place.offset) ? Math.max(0, place.offset) : 0 };
 }
-function spreadPages(spread) {
-  const pages = spread.leaves.map((fragment, i) => {
+async function spreadPages(spread, context) {
+  const pages = await Promise.all(spread.leaves.map(async (fragment, i) => {
     const page = paperPage(fragment.page, i === 0 ? 'left' : 'right', fragment.start);
     page.dataset.textEnd = fragment.end;
-    fillFragment(page, fragment);
+    if (fragment.kind === 'scan') await fillScannedPage(fragment.page, page, context);
+    else fillFragment(page, fragment);
     return page;
-  });
+  }));
   if (!smallScreen.matches && pages.length < 2) pages.push(paperPage(pageCount() + 1, 'right'));
   return pages;
 }
@@ -774,6 +782,7 @@ function commitSpread(spread, pages, place = spread.anchor) {
 }
 async function render() {
   stopReadingRender();
+  if (mode === 'book' && hasNoReadableText()) mode = 'original';
   const renderEpoch = ++epoch;
   const source = pdf;
   fittedSpread = null;
@@ -848,7 +857,7 @@ async function render() {
   const preparation = { pager, signal, buffer: createSpreadBuffer({ prepare: async anchor => {
     const spread = await pager.spread(anchor, step());
     if (signal.aborted || renderEpoch !== epoch) throw new DOMException('Reading layout changed.', 'AbortError');
-    return { spread, pages: spreadPages(spread) };
+    return { spread, pages: await spreadPages(spread, { signal, renderEpoch, source }) };
   } }) };
   spreadPreparation = preparation;
   pageFillPromise = (async () => {
@@ -936,6 +945,7 @@ $('page-form').addEventListener('submit', event => { event.preventDefault(); nav
 $('page-input').addEventListener('blur', () => { $('page-input').value = book.page; });
 $('progress-slider').addEventListener('change', event => navigate(Number(event.target.value)));
 function setMode(value) {
+  if (value === 'book' && hasNoReadableText()) value = 'original';
   if (mode === value) return;
   flushScrollSave(); mode = value; render();
   persist({ positionOnly: true });
