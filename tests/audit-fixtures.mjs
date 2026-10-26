@@ -48,3 +48,16 @@ export function makeOpeningAuditPdf() {
   output += offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
   return `${output}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
 }
+
+export function makeDistantScrollAuditPdf() {
+  return makeLayoutPdf(Array.from({ length: 17 }, (_, index) => ({
+    view: [0, 0, 600, 900],
+    items: [
+      ...(index === 0 || index === 16 ? [{ text: `Chapter ${index === 0 ? 1 : 2}: A Distant Opening`, x: 40, y: 840, size: 20 }] : []),
+      ...Array.from({ length: index % 3 === 2 ? 6 : 42 }, (_, line) => ({
+        text: `Original source page ${index + 1}, body line ${line + 1} continues along the quiet road and through the trees.`,
+        x: 40, y: 800 - line * 15, size: 10,
+      })),
+    ],
+  })));
+}

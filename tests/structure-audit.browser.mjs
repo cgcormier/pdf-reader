@@ -11,7 +11,7 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeStructurePdf } from './structure-fixture.mjs';
 import { makeLayoutPdf, modestHeadingPages, runningHeaderPages } from './pdf-layout-fixture.mjs';
-import { makeProseAuditPdf, makeOpeningAuditPdf, proseLines } from './audit-fixtures.mjs';
+import { makeProseAuditPdf, makeOpeningAuditPdf, makeDistantScrollAuditPdf, proseLines } from './audit-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const issues = process.argv.slice(2).map(value => value.replace(/^#/, ''));
@@ -323,6 +323,7 @@ async function modestHeadings(page) {
 }
 
 async function chapterReconciliation(page) {
+  await distantScrollJump(page);
   for (const [name, bytes, label] of [
     ['Reconciled sample.pdf', await readFile(path.join(root, 'public', 'sample.pdf')), 'sample'],
     ['Reconciled prefatory.pdf', makeOpeningAuditPdf(), 'prefatory'],
@@ -395,6 +396,76 @@ async function chapterReconciliation(page) {
     }
     report.push(`PASS #13 ${label}: coherent chapter titles and Contents preserve outline IDs; every destination restores selection and source anchor in both layouts without changing PDF bytes.`);
   }
+}
+
+async function distantScrollJump(page) {
+  await importPdf(page, 'Distant scroll destinations.pdf', makeDistantScrollAuditPdf());
+  const original = await savedBook(page);
+  const destination = original.structure.nodes.find(node => node.page === 17 && node.kind === 'chapter');
+  assert.ok(destination, 'distant source chapter missing');
+  await page.locator('#pages-layout').click(); await settled(page);
+  await page.locator('#appearance-button').press('Home');
+  for (let step = 0; step < 7; step++) await page.locator('#appearance-button').press('ArrowRight');
+  await page.locator('#page-input').fill('4'); await page.locator('#page-input').press('Enter'); await settled(page);
+  await page.locator('#scroll-layout').click(); await settled(page);
+  await page.locator('#page-input').fill('17'); await page.locator('#page-input').press('Enter');
+  await page.locator('#page-input').blur();
+  const snapshot = () => page.evaluate(async () => {
+    const { getBook } = await import('/src/storage.js');
+    const book = await getBook(JSON.parse(localStorage.getItem('folio:active-book')));
+    const stage = document.querySelector('#scroll-stage'); const readingY = stage.getBoundingClientRect().top + 18;
+    const pages = [...stage.querySelectorAll('.scroll-page')].map(node => ({
+      page: Number(node.dataset.sourcePage), top: node.getBoundingClientRect().top,
+      bottom: node.getBoundingClientRect().bottom, height: node.getBoundingClientRect().height,
+    }));
+    return { savedPage: book.page, inputPage: document.querySelector('#page-input').value,
+      position: book.bookPosition, readingY, visiblePage: pages.find(node => node.top <= readingY && node.bottom > readingY)?.page,
+      activeLoads: stage.dataset.activeLoads, scrollTop: stage.scrollTop, scrollHeight: stage.scrollHeight, pages };
+  });
+  const trace = [];
+  for (let frame = 0; frame < 10; frame++) {
+    trace.push(await snapshot()); await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await page.waitForFunction(() => document.querySelector('#scroll-stage').dataset.activeLoads === '0');
+  await new Promise(resolve => setTimeout(resolve, 850));
+  trace.push(await snapshot());
+  await writeFile(path.join(runDirectory, 'issue-13-distant-scroll-trace.json'), JSON.stringify(trace, null, 2));
+  const final = trace.at(-1);
+  await capture(page, '13', 'distant-scroll-jump');
+  assert.equal(final.savedPage, 17, 'distant Scroll jump changed the saved source page');
+  assert.equal(final.visiblePage, 17, 'distant Scroll target is mounted outside the reading line');
+  assert.ok(trace.every(frame => frame.pages.length <= 7), 'distant jump exceeded mounted page limit');
+  await page.locator(`[data-node-id="${destination.id}"]`).click(); await settled(page);
+  await waitForBook(page, book => book.bookPosition?.contentsId === destination.id && book.bookPosition.source);
+  await new Promise(resolve => setTimeout(resolve, 850));
+  assert.equal((await snapshot()).visiblePage, 17, 'distant Contents target is outside the reading line');
+  const before = await savedBook(page);
+  await page.reload();
+  await page.waitForFunction(() => !document.querySelector('#modal').open && document.querySelector('#book-type').textContent === 'FROM YOUR SHELF');
+  await settled(page);
+  await page.waitForFunction(() => document.querySelector('#scroll-stage').dataset.activeLoads === '0');
+  await new Promise(resolve => setTimeout(resolve, 850));
+  const after = await savedBook(page);
+  assert.equal((await snapshot()).visiblePage, 17, 'distant source anchor did not restore at the reading line');
+  assert.equal(after.page, 17);
+  assert.equal(after.bookPosition.contentsId, destination.id);
+  assert.deepEqual(after.bookPosition.source, before.bookPosition.source, 'distant source anchor changed on reload');
+  assert.equal(await page.locator(`[data-node-id="${destination.id}"]`).getAttribute('aria-current'), 'location');
+  assert.deepEqual(Buffer.from(after.bytes), Buffer.from(original.bytes));
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  for (const target of [1, 17]) {
+    await page.locator('#page-input').fill(String(target)); await page.locator('#page-input').press('Enter');
+    await page.locator('#page-input').blur();
+    await page.waitForFunction(() => document.querySelector('#scroll-stage').dataset.activeLoads === '0');
+    await new Promise(resolve => setTimeout(resolve, 850));
+    const position = await snapshot();
+    assert.equal(position.savedPage, target, 'ordinary-motion distant jump changed saved page');
+    assert.equal(position.visiblePage, target, 'ordinary-motion distant jump missed reading line');
+    assert.ok(position.pages.length <= 7, 'ordinary-motion jump exceeded mounted page limit');
+  }
+  await capture(page, '13', 'distant-scroll-ordinary-motion');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  report.push('PASS #13 distant Scroll: reduced-motion jump17 and selected Contents/source-anchor reload; ordinary-motion jumps1/17; visible/saved destinations and mounted-page bounds retained.');
 }
 
 async function sourceHeaders(page) {

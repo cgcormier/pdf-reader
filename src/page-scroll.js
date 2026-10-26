@@ -331,7 +331,8 @@ export function createPageScroller(container, {
       overscan,
       maxMounted: mountedLimit,
     });
-    if (!currentWindow || desired.start !== currentWindow.start || desired.end !== currentWindow.end) {
+    const windowChanged = !currentWindow || desired.start !== currentWindow.start || desired.end !== currentWindow.end;
+    if (windowChanged) {
       currentWindow = desired;
       for (const page of [...mounted.keys()]) {
         if (page < desired.start || page > desired.end) unmountPage(page);
@@ -343,6 +344,9 @@ export function createPageScroller(container, {
       pumpLoads();
     }
     syncSpacers();
+    // Replacing slots can temporarily shorten the track and clamp native scroll.
+    // Restore the captured reading position after its spacers are back in place.
+    if (windowChanged) container.scrollTop = geometry.offsetForPosition(position.page, position.fraction, lineInset());
     stats();
     notifyPosition(position);
   }

@@ -261,7 +261,8 @@ body:not(.scroll-mode) .app-footer { min-height: 32px; }
 .scroll-stage::-webkit-scrollbar-track { background: #e5dccb; }
 .scroll-stage::-webkit-scrollbar-thumb { border: 2px solid #e5dccb; border-radius: 8px; background: #a99980; }
 .scroll-track { width: 100%; }
-.scroll-spacer { width: 100%; min-height: 1px; }
+/* Geometry spacers must update synchronously, including under motion overrides. */
+.scroll-spacer { width: 100%; min-height: 1px; transition: none; }
 .scroll-page-slot { display: flex; justify-content: center; width: 100%; margin: 0 0 28px; }
 .paper-page.scroll-page { width: min(100%, 680px); min-height: 620px; height: auto; max-height: none; padding: 48px clamp(38px, 6vw, 70px) 32px; overflow: visible; background: var(--paper-light); box-shadow: 0 3px 8px rgba(57, 43, 32, .075), 0 16px 30px rgba(57, 43, 32, .09); }
 .scroll-page .page-running-header { flex-shrink: 0; }
