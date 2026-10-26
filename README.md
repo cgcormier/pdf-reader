@@ -2,6 +2,14 @@
 
 A tiny local PDF reading room for Windows, also available in Chrome: walnut accents, parchment, serif type, chapter contents and source page numbers. Choose continuous scrolling or an open-book spread. The design and build pipeline are in [docs/PLAN.md](docs/PLAN.md).
 
+## License
+
+Required Notice: Copyright (c) 2026 Carter Cormier
+
+Folio's original code is available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It permits use, modification and sharing for the purposes defined in the license, including noncommercial purposes and its specified personal and organizational uses. This is source-available software, not an open-source license.
+
+Commercial use outside those permissions, including selling Folio or incorporating its code into a commercial paid application, requires a separate license from Carter Cormier. Contact [the repository owner](https://github.com/cgcormier) to discuss commercial licensing. The full license governs permissions; third-party code, dependencies and assets retain their respective licenses.
+
 ## Open it
 
 Double-click **Folio-1.0.0-Windows-x64.exe** from `release/`. This is a portable desktop app for **64-bit Windows 10 or later**. It opens its own window and includes Chromium, the reader, PDF.js, fonts and PDF assets. No Node.js, Chrome installation, local server, administrator access, or internet connection is required to read PDFs. Close the window to quit; opening the executable again while Folio is running brings the existing window forward.
