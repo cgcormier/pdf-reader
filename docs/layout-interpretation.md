@@ -6,9 +6,18 @@
 > discarded at the storage boundary. Earlier compatibility notes below describe
 > the previous implementation.
 
+## October 26 outline classification
+
+Detector snapshots now use version 6. Dense numeric scanner outlines are retained
+in `structure.pageNavigation`, separate from semantic Contents nodes. The reader
+exposes their original destinations under PDF page bookmarks. Sparse numeric and
+Roman chapter outlines remain semantic. Upgrading a saved scan also refreshes
+chapter typography and fitted leaves without replacing PDF bytes or source anchors.
+The density rule is conservative; ambiguous short numeric outlines remain unchanged.
+
 ## October 23 review fixes
 
-Detector snapshots now use version 5. Printed Contents detection accepts numbered
+Detector snapshots used version 5. Printed Contents detection accepts numbered
 rows even when the reading layout classifies them as lists; ordinary list items
 remain excluded from standalone heading evidence. Horizontal fragments retain
 their original tolerant baseline-row identity, keeping title and page-number

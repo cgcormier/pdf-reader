@@ -1,6 +1,6 @@
 import { readPageLayout } from './pdf-layout-adapter.js';
 import { structureLines } from './pdf-layout.js';
-export const STRUCTURE_VERSION = 5;
+export const STRUCTURE_VERSION = 6;
 
 const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
@@ -58,7 +58,7 @@ function baseNode({ title, parentId = null, page, y = null, source, confidence, 
   return { id: stableId(idSeed), parentId, title: clean(title), kind: finalKind, page, y, level: finalLevel, source, confidence, evidence, ...(pageLabel ? { pageLabel } : {}) };
 }
 function blankStructure(pdf, pageLabels) {
-  return { version: STRUCTURE_VERSION, nodes: [], candidates: [], scannedPages: [], failedPages: [], totalPages: Number(pdf.numPages) || 0, status: 'pending', textPages: 0, tocUnresolved: 0, ...(pageLabels ? { pageLabels } : {}) };
+  return { version: STRUCTURE_VERSION, nodes: [], pageNavigation: [], candidates: [], scannedPages: [], failedPages: [], totalPages: Number(pdf.numPages) || 0, status: 'pending', textPages: 0, tocUnresolved: 0, ...(pageLabels ? { pageLabels } : {}) };
 }
 function parseDestination(dest) {
   if (!Array.isArray(dest) || !dest.length) return { first: null, y: null };
@@ -124,6 +124,36 @@ async function firstDescendantAnchor(pdf, items, signal) {
     if (nested) return nested;
   }
   return null;
+}
+
+function separatePageNavigation(nodes, totalPages) {
+  const parents = new Set(nodes.map((node) => node.parentId).filter(Boolean));
+  const siblings = new Map();
+  for (const node of nodes) {
+    const group = siblings.get(node.parentId) ?? [];
+    group.push(node); siblings.set(node.parentId, group);
+  }
+  const navigation = new Set();
+  for (const group of siblings.values()) {
+    const numeric = group.filter((node) => /^\d+$/.test(node.title) && !parents.has(node.id));
+    const pages = [...new Set(numeric.map((node) => node.page))].sort((a, b) => a - b);
+    // Scan labels need both page-like titles and near page-per-bookmark coverage.
+    // Sparse numbered chapters and Roman chapter names remain semantic headings.
+    if (numeric.length < 12 || numeric.length < group.length * .8 || pages.length < totalPages * .8
+      || pages.length < (pages.at(-1) - pages[0] + 1) * .9 || pages.length < numeric.length * .9) continue;
+    const padded = numeric.filter((node) => /^0\d+/.test(node.title)).length >= numeric.length * .8;
+    const offsets = new Map();
+    for (const node of numeric) {
+      const offset = Number(node.title) - node.page;
+      offsets.set(offset, (offsets.get(offset) ?? 0) + 1);
+    }
+    const tracksPages = numeric.length >= 40 && Math.max(...offsets.values()) >= numeric.length * .9;
+    if (padded || tracksPages) for (const node of numeric) navigation.add(node);
+  }
+  return {
+    nodes: nodes.filter((node) => !navigation.has(node)),
+    pageNavigation: nodes.filter((node) => navigation.has(node)).map((node) => ({ ...node, evidence: [...node.evidence, 'Dense numeric scan-page navigation'] })),
+  };
 }
 
 function romanNumber(text) {
@@ -222,7 +252,7 @@ export async function readDocumentStructure(pdf, { signal } = {}) {
   checkAbort(signal);
   const labels = await getLabels(pdf, signal);
   const structure = blankStructure(pdf, labels);
-  structure.nodes = await outlineNodes(pdf, labels, signal);
+  Object.assign(structure, separatePageNavigation(await outlineNodes(pdf, labels, signal), structure.totalPages));
   if (structure.nodes.length && Math.min(...structure.nodes.map((n) => n.page)) > 1) {
     structure.nodes.push(baseNode({ title: 'Opening pages', page: 1, source: 'fallback', confidence: 'medium', evidence: ['Pages before the first outline destination'], kind: 'frontmatter', level: 0 }));
   }
@@ -231,7 +261,7 @@ export async function readDocumentStructure(pdf, { signal } = {}) {
   return structure;
 }
 
-function snapshotOf(state) { return { ...state, nodes: state.nodes.map((n) => ({ ...n, evidence: [...n.evidence] })), candidates: state.candidates.map((c) => ({ ...c, evidence: [...(c.evidence ?? [])] })), scannedPages: [...state.scannedPages], failedPages: [...state.failedPages], ...(state.pageLabels ? { pageLabels: [...state.pageLabels] } : {}), _outlineNodes: state._outlineNodes.map((n) => ({ ...n, evidence: [...n.evidence] })), _baseCandidates: [...state._baseCandidates] }; }
+function snapshotOf(state) { return { ...state, nodes: state.nodes.map((n) => ({ ...n, evidence: [...n.evidence] })), pageNavigation: state.pageNavigation.map((n) => ({ ...n, evidence: [...n.evidence] })), candidates: state.candidates.map((c) => ({ ...c, evidence: [...(c.evidence ?? [])] })), scannedPages: [...state.scannedPages], failedPages: [...state.failedPages], ...(state.pageLabels ? { pageLabels: [...state.pageLabels] } : {}), _outlineNodes: state._outlineNodes.map((n) => ({ ...n, evidence: [...n.evidence] })), _baseCandidates: [...state._baseCandidates] }; }
 
 /** Scan every physical page incrementally. The PDF remains owned by the caller. */
 export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpdate, initial } = {}) {
@@ -242,6 +272,7 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
     ? initial : await readDocumentStructure(pdf, { signal });
   const baseNodes = seed._outlineNodes ?? (seed.nodes ?? []).filter((n) => n.source === 'outline' || (n.source === 'fallback' && n.title === 'Opening pages'));
   const state = { ...blankStructure(pdf, seed.pageLabels), ...seed, totalPages: Number(pdf.numPages) || 0, nodes: (seed.nodes ?? []).map((n) => ({ ...n, evidence: [...(n.evidence ?? [])] })), candidates: [...(seed.candidates ?? [])], scannedPages: [...new Set(seed.scannedPages ?? [])], failedPages: [...new Set(seed.failedPages ?? [])], _headingEvidence: [...(seed._headingEvidence ?? [])], _tocEvidence: [...(seed._tocEvidence ?? [])], _outlineNodes: baseNodes.map((n) => ({ ...n, evidence: [...(n.evidence ?? [])] })), _baseCandidates: [...(seed._baseCandidates ?? [])], status: 'scanning' };
+  state.pageNavigation = (seed.pageNavigation ?? []).map((node) => ({ ...node, evidence: [...(node.evidence ?? [])] }));
   const failed = new Set(state.failedPages);
   const scanned = new Set(state.scannedPages.filter((page) => !failed.has(page)));
   const labels = state.pageLabels;

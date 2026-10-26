@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeDocumentStructure, readDocumentStructure } from '../src/document-structure.js';
+import { structureNodes, chaptersFromNodes } from '../src/structure-model.js';
 
 function item(str, x, y, size = 10, width = str.length * size * .5) {
   return { str, width, transform: [size, 0, 0, size, x, y], hasEOL: false };
@@ -53,6 +54,47 @@ test('reads late outline entries past page 120 without scanning page text', asyn
   const result = await readDocumentStructure(doc);
   assert.equal(result.nodes.find((n) => n.title === 'Late chapter').page, 131);
   assert.equal(calls, 0);
+});
+
+test('dense scanner bookmarks retain destinations without creating chapter typography', async () => {
+  const outline = Array.from({ length: 228 }, (_, index) => ({
+    title: index === 227 ? '9999' : String(index * 2 + 1).padStart(4, '0'),
+    dest: [index, { name: 'XYZ' }, null, 730],
+  }));
+  const doc = pdf({ count: 228, outline });
+  const initial = await readDocumentStructure(doc);
+  assert.deepEqual(initial.nodes, []);
+  assert.equal(initial.pageNavigation.length, 228);
+  assert.deepEqual(initial.pageNavigation.map((node) => [node.title, node.page, node.y]), outline.map((entry, index) => [entry.title, index + 1, 730]));
+  const updates = [];
+  const result = await analyzeDocumentStructure(doc, { initial, onUpdate: (snapshot) => updates.push(snapshot) });
+  assert.deepEqual(result.nodes.map((node) => node.title), ['Entire book']);
+  assert.deepEqual(chaptersFromNodes(structureNodes(result)).map((node) => node.title), ['Entire book']);
+  assert.equal(result.pageNavigation.length, 228);
+  updates[0].pageNavigation[0].evidence.push('snapshot mutation');
+  assert.ok(!result.pageNavigation[0].evidence.includes('snapshot mutation'));
+  const resumed = await analyzeDocumentStructure(doc, { initial: result });
+  assert.deepEqual(resumed.pageNavigation, result.pageNavigation);
+  resumed.pageNavigation[0].evidence.push('resumed mutation');
+  assert.ok(!result.pageNavigation[0].evidence.includes('resumed mutation'));
+});
+
+test('sparse numeric chapters, padded numbers, and dense Roman chapters stay semantic', async () => {
+  for (const titles of [['1', '2', '3'], ['0001', '0002', '0003'], ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII']]) {
+    const count = titles.length === 12 ? 12 : 60;
+    const outline = titles.map((title, index) => ({ title, dest: [titles.length === 12 ? index : index * 20] }));
+    const result = await readDocumentStructure(pdf({ count, outline }));
+    assert.deepEqual(result.nodes.map((node) => node.title), titles);
+    assert.deepEqual(result.pageNavigation, []);
+  }
+});
+
+test('dense unpadded page counters separate from semantic named outline entries', async () => {
+  const outline = Array.from({ length: 50 }, (_, index) => ({ title: String(index + 1), dest: [index] }));
+  outline.push({ title: 'Chapter 1: Arrival', dest: [4] });
+  const result = await readDocumentStructure(pdf({ count: 50, outline }));
+  assert.equal(result.pageNavigation.length, 50);
+  assert.deepEqual(result.nodes.map((node) => node.title), ['Chapter 1: Arrival', 'Opening pages']);
 });
 
 test('inferred chapters and decimal sections attach beneath the applicable outline part', async () => {

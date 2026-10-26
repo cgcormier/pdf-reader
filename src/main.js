@@ -216,8 +216,13 @@ async function startStructureScan(fresh = false) {
       if (book !== target || pdf !== source) return;
       target.structure = snapshot;
       target.scannedPages = snapshot.scannedPages.length;
+      const chapters = chaptersFromNodes(structureNodes(snapshot, source.numPages));
+      const chaptersChanged = JSON.stringify(chapters) !== JSON.stringify(target.chapters);
+      target.chapters = chapters;
       // Only a complete, successful scan can rule out text in later pages.
       if (mode === 'book' && hasNoReadableText()) setMode('original');
+      // Saved chapter intros and fitted leaves must follow an upgraded detector.
+      else if (chaptersChanged) void render();
       updateContents(); updateReadingPosition(); persist();
     },
     onError: () => {
@@ -361,6 +366,23 @@ function updateContents() {
   };
   append(null, fragment);
   if (!nodes.length) fragment.append(el('p', 'inline-note', 'Finding the document’s headings…'));
+  const pageBookmarks = book.structure?.pageNavigation || [];
+  if (pageBookmarks.length) {
+    // Scanner destinations remain useful without becoming chapter identities.
+    const details = el('details', 'page-bookmarks');
+    details.open = Boolean($('chapter-list').querySelector('.page-bookmarks')?.open);
+    details.append(el('summary', 'text-button', `PDF page bookmarks (${pageBookmarks.length})`));
+    const list = el('ul', 'contents-list');
+    for (const node of pageBookmarks) {
+      const item = el('li', 'contents-item');
+      const link = button('', 'chapter-link structure-link', () => navigateStructure(node));
+      link.dataset.pageBookmark = node.id; link.dataset.contentsFocus = node.id;
+      link.title = `${node.title} · PDF page ${node.page}`;
+      link.append(el('span', 'chapter-label', node.title), el('span', 'chapter-page', node.page));
+      item.append(link); list.append(item);
+    }
+    details.append(list); fragment.append(details);
+  }
   $('chapter-list').replaceChildren(fragment);
   highlightedContents = path;
   $('current-chapter').dataset.activeId = active?.id || '';

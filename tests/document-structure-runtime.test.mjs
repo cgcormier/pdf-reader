@@ -6,6 +6,23 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { readDocumentStructure, analyzeDocumentStructure } from '../src/document-structure.js';
 import { makeStructurePdf, makePlayPdf } from './structure-fixture.mjs';
 
+test('real PDF.js scanner outline remains navigation alongside detected semantic headings', async () => {
+  const task = getDocument({ data: new Uint8Array(Buffer.from(makeStructurePdf({ outline: 'scan-pages', pages: 24 }))), isEvalSupported: false,
+    standardFontDataUrl: fileURLToPath(new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url)).replaceAll('\\', '/') });
+  try {
+    const pdf = await task.promise;
+    const initial = await readDocumentStructure(pdf);
+    assert.deepEqual(initial.nodes, []);
+    assert.equal(initial.pageNavigation.length, 24);
+    assert.deepEqual(initial.pageNavigation.at(-1).title, '9999');
+    const result = await analyzeDocumentStructure(pdf, { initial });
+    assert.equal(result.pageNavigation.length, 24);
+    assert.ok(result.nodes.some((node) => /Foundations/.test(node.title) && node.page === 3));
+    assert.ok(result.nodes.every((node) => !/^\d+$/.test(node.title)));
+    assert.deepEqual(result.pageNavigation.map((node) => [node.page, node.y]), Array.from({ length: 24 }, (_, index) => [index + 1, 730]));
+  } finally { await task.destroy(); }
+});
+
 for (const outline of [true, false]) {
   test(`real PDF.js handles a 132-page book (${outline ? 'partial nested outline' : 'printed contents only'})`, async () => {
     const task = getDocument({ data: new Uint8Array(Buffer.from(makeStructurePdf({ outline }))), isEvalSupported: false,

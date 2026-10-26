@@ -31,7 +31,13 @@ export function makeStructurePdf({ outline = true, pages = 132 } = {}) {
     add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 3 0 R >> >> /Contents ${6 + (number - 1) * 2} 0 R >>`);
     add(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
   }
-  if (outline) {
+  if (outline === 'scan-pages') {
+    add(`<< /Type /Outlines /First ${outlineRoot + 1} 0 R /Last ${outlineRoot + pages} 0 R /Count ${pages} >>`);
+    for (let page = 1; page <= pages; page++) {
+      const title = page === pages ? '9999' : String(page * 2 - 1).padStart(4, '0');
+      add(`<< /Title (${title}) /Parent ${outlineRoot} 0 R ${page > 1 ? `/Prev ${outlineRoot + page - 1} 0 R` : ''} ${page < pages ? `/Next ${outlineRoot + page + 1} 0 R` : ''} /Dest [${5 + (page - 1) * 2} 0 R /XYZ null 730 null] >>`);
+    }
+  } else if (outline) {
     const pageRef = number => `${5 + (number - 1) * 2} 0 R`;
     add(`<< /Type /Outlines /First ${outlineRoot + 1} 0 R /Last ${outlineRoot + 1} 0 R /Count 3 >>`);
     add(`<< /Title (Part I: Learning) /Parent ${outlineRoot} 0 R /First ${outlineRoot + 2} 0 R /Last ${outlineRoot + 2} 0 R /Count 2 /Dest [${pageRef(3)} /XYZ null 730 null] >>`);
