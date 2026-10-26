@@ -8,12 +8,18 @@
 
 ## October 26 outline classification
 
-Detector snapshots now use version 6. Dense numeric scanner outlines are retained
+Detector snapshots now use version 7. Dense numeric scanner outlines are retained
 in `structure.pageNavigation`, separate from semantic Contents nodes. The reader
 exposes their original destinations under PDF page bookmarks. Sparse numeric and
 Roman chapter outlines remain semantic. Upgrading a saved scan also refreshes
 chapter typography and fitted leaves without replacing PDF bytes or source anchors.
 The density rule is conservative; ambiguous short numeric outlines remain unchanged.
+
+Modest-size centered titles use casing, whitespace, size and title-sequence
+evidence shared by Book rendering and Contents. Smaller capitalized subtitles
+can remain children of their adjacent title. Source OCR spelling and anchors are
+preserved. Matching source titles suppress generated intros, including titles
+after a chapter-number or prefatory line and confirmed mid-page headings.
 
 ## October 23 review fixes
 

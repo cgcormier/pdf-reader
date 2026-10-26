@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeDocumentStructure, readDocumentStructure } from '../src/document-structure.js';
 import { structureNodes, chaptersFromNodes } from '../src/structure-model.js';
+import { modestHeadingPages } from './pdf-layout-fixture.mjs';
 
 function item(str, x, y, size = 10, width = str.length * size * .5) {
   return { str, width, transform: [size, 0, 0, size, x, y], hasEOL: false };
@@ -95,6 +96,58 @@ test('dense unpadded page counters separate from semantic named outline entries'
   const result = await readDocumentStructure(pdf({ count: 50, outline }));
   assert.equal(result.pageNavigation.length, 50);
   assert.deepEqual(result.nodes.map((node) => node.title), ['Chapter 1: Arrival', 'Opening pages']);
+});
+
+test('modest isolated layout titles reach Contents with source anchors and a small-capitals child', async () => {
+  const pages = new Map([[1, modestHeadingPages[0]], [17, modestHeadingPages[1]]]);
+  const doc = pdf({ count: 17 });
+  doc.getPage = async (number) => {
+    const page = pages.get(number);
+    return { view: page?.view ?? modestHeadingPages[0].view,
+      getTextContent: async () => ({ items: (page?.items ?? []).map(({ text, x, y, size, width }) => item(text, x, y, size, width)) }) };
+  };
+  const result = await analyzeDocumentStructure(doc);
+  const [prologue, speeches, metamorphoses] = structureNodes(result);
+  assert.deepEqual(result.nodes.map((node) => [node.title, node.page, node.y]), [
+    ["Zarathustra's Prologu e", 1, modestHeadingPages[0].items[10].y],
+    ["Zarathustra's Sp eeches", 17, modestHeadingPages[1].items[10].y],
+    ['O N T H E T H R E E M E T A M O R P H O S E S', 17, modestHeadingPages[1].items[11].y],
+  ]);
+  assert.equal(prologue.parentId, null);
+  assert.equal(speeches.parentId, null);
+  assert.equal(metamorphoses.parentId, speeches.id);
+  assert.equal(metamorphoses.kind, 'section');
+  assert.equal(metamorphoses.level, speeches.level + 1);
+  assert.ok(result.nodes.every((node) => node.sourceLineId && node.regionId));
+  assert.equal(result.candidates.length, 0);
+  assert.deepEqual(chaptersFromNodes(structureNodes(result)).map((node) => node.title), [prologue.title, speeches.title]);
+  const resumed = await analyzeDocumentStructure(doc, { initial: result });
+  assert.deepEqual(resumed.nodes, result.nodes);
+});
+
+test('modest layout title retains its applicable outline Part parent', async () => {
+  const page = modestHeadingPages[0];
+  const doc = pdf({ count: 2, outline: [{ title: 'Part I: Context', dest: [0] }] });
+  doc.getPage = async (number) => ({ view: page.view,
+    getTextContent: async () => ({ items: number === 2 ? page.items.map(({ text, x, y, size, width }) => item(text, x, y, size, width)) : [] }) });
+  const result = await analyzeDocumentStructure(doc);
+  const part = result.nodes.find((node) => node.kind === 'part');
+  const title = result.nodes.find((node) => node.title === "Zarathustra's Prologu e");
+  assert.equal(result.nodes.length, 2);
+  assert.equal(title.parentId, part.id);
+  assert.ok(title.level > part.level);
+});
+
+test('repeated modest titles preserve the first credible opening and its smaller title child', async () => {
+  for (const page of modestHeadingPages) {
+    const doc = pdf({ count: 3 });
+    doc.getPage = async () => ({ view: page.view,
+      getTextContent: async () => ({ items: page.items.map(({ text, x, y, size, width }) => item(text, x, y, size, width)) }) });
+    const result = await analyzeDocumentStructure(doc);
+    assert.deepEqual(result.nodes.map((node) => [node.title, node.page]), page.items.filter((_, index) => index === 10 || page === modestHeadingPages[1] && index === 11).map(({ text }) => [text, 1]));
+    if (page === modestHeadingPages[1]) assert.equal(result.nodes[1].parentId, result.nodes[0].id);
+    assert.equal(result.candidates.length, 0);
+  }
 });
 
 test('inferred chapters and decimal sections attach beneath the applicable outline part', async () => {

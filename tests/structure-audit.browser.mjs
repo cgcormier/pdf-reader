@@ -1,6 +1,6 @@
 /**
  * Real file-import/render acceptance checks, each selectable by audit issue.
- * node tests/structure-audit.browser.mjs [6|9|12|all]
+ * node tests/structure-audit.browser.mjs [6|9|10|12|all]
  * Owns a fresh retained Chrome profile and a random loopback Vite origin.
  */
 import assert from 'node:assert/strict';
@@ -10,12 +10,13 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeStructurePdf } from './structure-fixture.mjs';
+import { makeLayoutPdf, modestHeadingPages } from './pdf-layout-fixture.mjs';
 import { makeProseAuditPdf, makeOpeningAuditPdf, proseLines } from './audit-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const issues = process.argv.slice(2).map(value => value.replace(/^#/, ''));
-const selected = !issues.length || issues.includes('all') ? ['6', '9', '12'] : issues;
-assert.ok(selected.every(issue => ['6', '9', '12'].includes(issue)), 'Supported issues: 6, 9, 12, all');
+const selected = !issues.length || issues.includes('all') ? ['6', '9', '10', '12'] : issues;
+assert.ok(selected.every(issue => ['6', '9', '10', '12'].includes(issue)), 'Supported issues: 6, 9, 10, 12, all');
 const artifacts = path.join(root, 'output', 'playwright', 'structure-reconciliation');
 await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
@@ -256,6 +257,68 @@ async function openingTitles(page) {
   }
 }
 
+async function modestHeadings(page) {
+  await importPdf(page, 'Modest source headings.pdf', makeLayoutPdf(modestHeadingPages));
+  const book = await savedBook(page);
+  const expected = modestHeadingPages.flatMap((source, index) => source.items.slice(10, index ? 12 : 11)
+    .map(item => ({ title: item.text.replace(/'/g, '\u2019'), page: index + 1, y: item.y, size: item.size })));
+  assert.deepEqual(book.structure.nodes.map(node => [node.title, node.page]), expected.map(node => [node.title, node.page]));
+  book.structure.nodes.forEach((node, index) => assert.ok(Math.abs(node.y - expected[index].y) < .001, 'heading source baseline changed'));
+  const [prologue, speeches, section] = book.structure.nodes;
+  assert.equal(prologue.parentId, null); assert.equal(speeches.parentId, null);
+  assert.equal(section.parentId, speeches.id); assert.equal(section.kind, 'section');
+  assert.deepEqual(book.chapters.map(chapter => chapter.title), [prologue.title, speeches.title]);
+  for (const node of book.structure.nodes) assert.ok(node.sourceLineId && node.regionId, 'source heading identity missing');
+  for (const mode of ['pages', 'scroll']) {
+    await page.locator(`#${mode}-layout`).click(); await settled(page);
+    if (mode === 'scroll') {
+      for (const sourcePage of [1, 2]) {
+        await page.locator('#page-input').fill(String(sourcePage)); await page.locator('#page-input').press('Enter');
+        const paper = page.locator(`.scroll-page[data-source-page="${sourcePage}"]`);
+        await paper.locator('.layout-heading').first().waitFor();
+        const layout = await paper.evaluate(async node => {
+          const { conservation, sourceAt, offsetForSource } = await import('/src/pdf-layout.js');
+          const layout = node.layoutModel;
+          return { text: layout.projection.text, conservation: conservation(layout),
+            headings: layout.blocks.filter(block => block.role === 'heading').map(block => {
+              const line = block.lines[0]; const source = sourceAt(layout.projection, block.start);
+              return { text: layout.projection.text.slice(block.start, block.end), size: line.size,
+                y: line.sourceY, source, expectedItem: line.runs[0].index,
+                offset: block.start, back: offsetForSource(layout.projection, source) };
+            }) };
+        });
+        assert.equal(layout.conservation.valid, true);
+        const titles = expected.filter(node => node.page === sourcePage);
+        assert.deepEqual(layout.headings.map(node => [node.text, node.size]), titles.map(node => [node.title, node.size]));
+        layout.headings.forEach((node, index) => assert.ok(Math.abs(node.y - titles[index].y) < .001, 'rendered heading source baseline changed'));
+        for (const heading of layout.headings) {
+          assert.deepEqual(heading.source, { item: heading.expectedItem, offset: 0 });
+          assert.equal(heading.back, heading.offset);
+        }
+        const rendered = (await paper.locator('.page-prose .layout-block').allTextContents()).join(' ').replace(/\s+/g, ' ').trim();
+        assert.equal(rendered, layout.text.replace(/\s+/g, ' ').trim(), 'modest headings or body text changed');
+        assert.equal(await paper.locator('.chapter-intro').count(), 0, 'mid-page source heading duplicated by injected intro');
+      }
+    }
+    for (const node of book.structure.nodes) {
+      const parent = node.parentId && page.locator(`[aria-controls="contents-group-${node.parentId}"]`);
+      if (parent && await parent.getAttribute('aria-expanded') !== 'true') await parent.click();
+      await page.locator(`[data-node-id="${node.id}"]`).click(); await settled(page);
+      const saved = await waitForBook(page, current => current.bookPosition?.contentsId === node.id);
+      assert.equal(saved.page, node.page); assert.ok(saved.bookPosition.offset > 0, 'mid-page heading source anchor missing');
+      assert.equal(await page.locator(`[data-node-id="${node.id}"]`).getAttribute('aria-current'), 'location');
+      assert.equal(await page.locator('#current-chapter').textContent(), node.title);
+      const prose = page.locator(mode === 'pages' ? '#book-spread .page-prose' : `.scroll-page[data-source-page="${node.page}"] .page-prose`);
+      const text = (await prose.allTextContents()).join(' ').replace(/\s+/g, ' ');
+      assert.equal(text.split(node.title).length - 1, 1, `${mode}: modest source title duplicated or missing`);
+      const headingText = (await prose.locator('.layout-heading').allTextContents()).join(' ').replace(/\s+/g, ' ');
+      assert.equal(headingText.split(node.title).length - 1, 1, `${mode}: modest title lacks heading role`);
+    }
+    await capture(page, '10', mode);
+  }
+  report.push('PASS #10: three modest source headings retain exact text and anchors; two Contents roots and their small-capitals section navigate in both layouts without duplicate mid-page titles.');
+}
+
 try {
   await server.listen();
   const address = server.httpServer.address();
@@ -273,7 +336,7 @@ try {
     await page.goto(`${origin}/`);
     await page.locator('#file-input').waitFor({ state: 'attached' });
     try {
-      await ({ 6: scannerBookmarks, 9: proseHeadings, 12: openingTitles }[issue])(page);
+      await ({ 6: scannerBookmarks, 9: proseHeadings, 10: modestHeadings, 12: openingTitles }[issue])(page);
     } catch (error) {
       await capture(page, issue, 'failure');
       throw error;

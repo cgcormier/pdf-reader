@@ -1,6 +1,6 @@
 import { readPageLayout } from './pdf-layout-adapter.js';
 import { structureLines } from './pdf-layout.js';
-export const STRUCTURE_VERSION = 6;
+export const STRUCTURE_VERSION = 7;
 
 const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
@@ -334,10 +334,20 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
               const evidence = { title: display, page: pageNumber, y, size: line.size, median: bodyMedian, style: `${Math.round(line.size / Math.max(1, bodyMedian) * 10) / 10}:${Math.round(line.x / 25)}`, explicit: true, evidence: ['Explicit numbered heading'] };
               if (!state._headingEvidence.some((h) => h.page === pageNumber && titleKey(h.title) === titleKey(display) && Math.abs(h.y - y) < 2)) state._headingEvidence.push(evidence);
             }
-            else if (line.size >= bodyMedian * 1.45 && line.text.length >= 4 && line.text.length <= 90 && !/^\d+$/.test(line.text) && !/^(?:figure|fig\.|table|plate|copyright|contents|chapter|part|section)\b/i.test(line.text)) {
+            else if ((line.size >= bodyMedian * 1.45 || line.role === 'heading') && line.text.length >= 4 && line.text.length <= 90 && !/^\d+$/.test(line.text) && !/^(?:figure|fig\.|table|plate|copyright|contents|chapter|part|section)\b/i.test(line.text)) {
               const next = lines[i + 1];
-              if (next && next.size < line.size * .85 && line.y - next.y < Math.max(line.size * 3, 30)) {
-                const evidence = { title: line.text, page: pageNumber, y, size: line.size, median: bodyMedian, style: `${Math.round(line.size / Math.max(1, bodyMedian) * 10) / 10}:${Math.round(line.x / 25)}`, explicit: false, evidence: ['Prominent standalone typography'] };
+              // The layout combines centering, whitespace and title typography;
+              // its generic heading role alone does not establish Contents.
+              const reasons = line.role === 'heading' ? line.headingReasons ?? [] : [];
+              const isolatedTitle = reasons.includes('Centered title casing, separating whitespace and distinct size');
+              const smallCapsTitle = reasons.includes('Centered small-capitals title following a heading with separating whitespace');
+              const previous = lines[i - 1];
+              const layoutParentLineId = smallCapsTitle && previous?.role === 'heading' && previous.regionId === line.regionId
+                && previous.size > line.size ? previous.sourceLineId : null;
+              if (isolatedTitle || layoutParentLineId || next && next.size < line.size * .85 && line.y - next.y < Math.max(line.size * 3, 30)) {
+                const evidence = { title: line.text, page: pageNumber, y, size: line.size, median: bodyMedian, style: `${Math.round(line.size / Math.max(1, bodyMedian) * 10) / 10}:${Math.round(line.x / 25)}`, explicit: false,
+                  sourceLineId: line.sourceLineId, regionId: line.regionId, layoutTitle: isolatedTitle, layoutParentLineId,
+                  evidence: isolatedTitle || layoutParentLineId ? reasons : ['Prominent standalone typography'] };
                 if (!state._headingEvidence.some((h) => h.page === pageNumber && titleKey(h.title) === titleKey(line.text) && Math.abs(h.y - y) < 2)) state._headingEvidence.push(evidence);
               }
             }
@@ -428,10 +438,10 @@ function finalize(state, labels) {
   const headingInfo = headings.map((h) => {
     const prominent = h.size >= h.median * 1.35;
     const styleCorroborated = (stylePages.get(h.style)?.size ?? 0) >= 2;
-    return { h, prominent, styleCorroborated, credible: h.play ? playHeadings.has(h) : h.explicit ? prominent : prominent && styleCorroborated };
+    return { h, prominent, styleCorroborated, credible: h.play ? playHeadings.has(h) : h.layoutTitle || h.layoutParentLineId ? true : h.explicit ? prominent : prominent && styleCorroborated };
   });
   const firstProminent = new Map();
-  for (const info of headingInfo) if (info.prominent && !firstProminent.has(titleKey(info.h.title))) firstProminent.set(titleKey(info.h.title), info.h);
+  for (const info of headingInfo) if ((info.prominent || info.h.layoutTitle || info.h.layoutParentLineId) && !firstProminent.has(titleKey(info.h.title))) firstProminent.set(titleKey(info.h.title), info.h);
   const repeatedRunning = (h) => (counts.get(titleKey(h.title)) ?? 0) >= 3
     && (h.play ? h.play.family === 'act' && !playHeadings.has(h) : firstProminent.get(titleKey(h.title)) !== h);
 
@@ -471,6 +481,7 @@ function finalize(state, labels) {
   const tocMatchedHeadings = new Set(resolvedToc.filter((item) => item.page && item.heading).map((item) => item.heading));
   const outlineCorroborates = (h) => nodes.some((node) => node.source === 'outline' && node.page === h.page
     && titlesMatch(node.title, h.title));
+  const layoutParents = new Map();
   for (const h of headings) {
     const info = headingInfo.find((value) => value.h === h);
     if (repeatedRunning(h)) continue;
@@ -479,7 +490,9 @@ function finalize(state, labels) {
       state.candidates.push(makeCandidate({ title: h.title, page: h.page, y: h.y, source: 'headings', evidence: [...h.evidence, info.prominent ? 'No outline, contents, or repeated-style corroboration' : 'Typography is close to body text'], pageLabel: labels?.[h.page - 1] })); continue;
     }
     const node = baseNode({ title: h.title, page: h.page, y: h.y, source: 'headings', confidence: info.credible ? 'high' : 'medium', evidence: h.evidence, pageLabel: labels?.[h.page - 1] || undefined });
-    mergeNode(nodes, node);
+    const merged = mergeNode(nodes, node);
+    if (h.sourceLineId) { merged.sourceLineId = h.sourceLineId; merged.regionId = h.regionId; }
+    if (h.layoutParentLineId) { merged.kind = 'section'; layoutParents.set(merged.id, h.layoutParentLineId); }
   }
   for (const { entry, page, heading } of resolvedToc) {
     if (page && heading) {
@@ -510,6 +523,12 @@ function finalize(state, labels) {
       prior.push(node); continue;
     }
     if (node.source === 'outline') { prior.push(node); continue; }
+    const layoutParent = layoutParents.has(node.id) && prior.find((candidate) => candidate.page === node.page && candidate.regionId === node.regionId
+      && candidate.sourceLineId === layoutParents.get(node.id));
+    if (layoutParent) {
+      node.parentId = layoutParent.id; node.level = layoutParent.level + 1;
+      prior.push(node); continue;
+    }
     let boundaryIndex = -1;
     for (let i = 0; i < prior.length; i++) if (prior[i].kind === 'part' || prior[i].kind === 'appendix') boundaryIndex = i;
     const eligible = prior.slice(Math.max(0, boundaryIndex)).filter((candidate) => candidate.page <= node.page && candidate.id !== node.id);

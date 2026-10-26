@@ -5,6 +5,32 @@ import { readFile } from 'node:fs/promises';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { readDocumentStructure, analyzeDocumentStructure } from '../src/document-structure.js';
 import { makeStructurePdf, makePlayPdf } from './structure-fixture.mjs';
+import { makeLayoutPdf, modestHeadingPages } from './pdf-layout-fixture.mjs';
+import { readPageLayout } from '../src/pdf-layout-adapter.js';
+import { conservation } from '../src/pdf-layout.js';
+
+test('real PDF.js carries modest title layout evidence through to hierarchical Contents', async () => {
+  const task = getDocument({ data: makeLayoutPdf(modestHeadingPages), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    const result = await analyzeDocumentStructure(pdf);
+    assert.deepEqual(result.nodes.map((node) => [node.title.replaceAll('’', "'"), node.page]), [
+      ["Zarathustra's Prologu e", 1], ["Zarathustra's Sp eeches", 2],
+      ['O N T H E T H R E E M E T A M O R P H O S E S', 2],
+    ]);
+    assert.equal(result.nodes[2].parentId, result.nodes[1].id);
+    assert.equal(result.nodes[2].kind, 'section');
+    for (let page = 1; page <= pdf.numPages; page++) {
+      const layout = await readPageLayout(pdf, page);
+      assert.deepEqual(conservation(layout), { valid: true, errors: [] });
+      for (const node of result.nodes.filter((node) => node.page === page)) {
+        const line = layout.lines.find((line) => line.id === node.sourceLineId);
+        assert.equal(node.y, line.sourceY);
+        assert.equal(node.title, layout.projection.text.slice(line.start, line.end));
+      }
+    }
+  } finally { await task.destroy(); }
+});
 
 test('real PDF.js scanner outline remains navigation alongside detected semantic headings', async () => {
   const task = getDocument({ data: new Uint8Array(Buffer.from(makeStructurePdf({ outline: 'scan-pages', pages: 24 }))), isEvalSupported: false,

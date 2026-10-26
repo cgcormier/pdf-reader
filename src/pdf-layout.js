@@ -25,6 +25,9 @@ const isHeading = text => {
   if (/^(?:(?:act|scene)\s+(?:[ivxlcdm]+|\d+)\.?|\d+(?:\.\d+)+\s+.+|preface|contents|table of contents)$/i.test(text)) return true;
   const match = text.match(numberedHeading);
   if (!match) return false;
+  // A valid numeral can start a sentence too: "book I read yesterday".
+  const suffix = text.slice(match[0].length).replace(/^[\s:.,–—-]+/u, '');
+  if (/^\p{Ll}/u.test(suffix)) return false;
   const number = match[2];
   // A prose word after "part" or "book" supplies no structural evidence.
   // Validate whole Roman tokens too: words such as "civil" use Roman letters.
@@ -32,6 +35,13 @@ const isHeading = text => {
     || /^[ivxlcdm]+$/i.test(number) && /^(?=.)M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$/i.test(number)
     || /^appendix$/i.test(match[1]) && /^[a-z]$/i.test(number)
     || /^section$/i.test(match[1]) && /^[A-Z]$/.test(number);
+};
+const titleCase = text => {
+  const words = text.match(/\p{L}[\p{L}\p{M}'’]*/gu) ?? [];
+  return words.length > 0 && /^\p{Lu}/u.test(text) && !/[.!?;,]$/.test(text)
+    && words.every((word, index) => /^\p{Lu}/u.test(word) || /^(?:a|an|and|at|by|for|from|in|of|on|or|the|to|with)$/.test(word)
+      // Broken OCR words contribute casing evidence without changing source text.
+      || index > 0 && (word.length === 1 || /^\p{Lu}\p{Ll}?$/u.test(words[index - 1])));
 };
 const speakerMatch = text => {
   const match = text.match(/^([\p{Lu}][\p{Lu}\p{M}’'.-]*(?:\s+[\p{Lu}][\p{Lu}\p{M}’'.-]*){0,2})(?:\s+|$)/u);
@@ -234,8 +244,19 @@ function makeBlocks(lines, regions, size, tags, pageHeight) {
     const tag = line.runs.flatMap(r => r.markedIds.map(id => tags.roles.get(id))).find(Boolean);
     const explicit = isHeading(text) || /^H[1-6]$/.test(tag ?? '');
     const label = drama && !explicit ? speakerMatch(text) : null;
-    const heading = explicit || (!label && !line.caps.length && line.size > size * 1.4 && text.length < 100);
     const centered = width > size * 12 && line.x - region.x > size * 2 && Math.abs((line.x + line.right - region.x - region.right) / 2) < size * 2;
+    const before = lines[index - 1]; const after = lines[index + 1]; const previous = blocks.at(-1);
+    const above = before?.regionId === line.regionId ? line.baseline - before.baseline : Infinity;
+    const below = after?.regionId === line.regionId ? after.baseline - line.baseline : Infinity;
+    const isolatedTitle = !drama && centered && !line.caps.length && text.length < 100 && titleCase(text)
+      && line.size >= size * 1.08 && above >= spacing * 1.6 && below >= spacing * 1.35 && below <= spacing * 5;
+    // Small capitals can be smaller than body type. Their title sequence and
+    // whitespace must support the role; uppercase body prose alone cannot.
+    const smallCapsTitle = !drama && centered && !line.caps.length && text.length < 100
+      && /\p{Lu}{2}/u.test(text.replace(/\s/gu, '')) && !/\p{Ll}/u.test(text) && !/[.!?;,]$/.test(text)
+      && previous?.role === 'heading' && before?.regionId === line.regionId
+      && above >= spacing * 1.35 && above <= spacing * 3 && below >= spacing * 1.15 && below <= spacing * 3;
+    const heading = explicit || (!label && !line.caps.length && line.size > size * 1.4 && text.length < 100) || isolatedTitle || smallCapsTitle;
     const direction = drama && !heading && !label && (((centered || line.x - region.x > size * 3 && text.length < 80) && /^(?:Enter|Exit|Exeunt|Flourish|\[|\()/i.test(text))
       || (line.runs.some(r => /italic|oblique/i.test(r.style.fontFamily + r.fontName)) && /^(?:Enter|Exit|Exeunt|\[)/i.test(text)));
     const unsupported = Math.abs(line.angle) > .08 || line.runs.some(r => r.dir !== 'ltr' || r.style.vertical);
@@ -245,7 +266,6 @@ function makeBlocks(lines, regions, size, tags, pageHeight) {
     const footnote = /^\d+[.)]?\s+\p{L}/u.test(text) && line.size < size * .8 && line.baseline > pageHeight * .7;
     let role = unsupported || table || formula ? 'unknown' : caption ? 'caption' : footnote ? 'footnote' : heading ? 'heading' : direction ? 'stage-direction' : label ? 'speech' : drama ? 'line-group'
       : /^(?:[•*-]|\d+[.)])\s/u.test(text) || tag === 'LI' ? 'list' : 'paragraph';
-    const previous = blocks.at(-1); const before = lines[index - 1];
     const listContinuation = previous?.role === 'list' && role === 'paragraph' && before.regionId === line.regionId
       && line.baseline - before.baseline <= spacing * 1.45 && line.x - previous.lines[0].x > size * .5 && line.x - previous.lines[0].x < size * 4;
     if (listContinuation) role = 'list';
@@ -273,6 +293,8 @@ function makeBlocks(lines, regions, size, tags, pageHeight) {
       confidence: role === 'unknown' || role === 'line-group' ? 'low' : 'medium',
       reasons: [unsupported ? 'Unsupported direction/orientation: inspect Original' : table || formula ? 'Possible table/formula: inspect Original'
         : caption ? 'Numbered figure/table caption' : footnote ? 'Small numbered text below the body'
+        : smallCapsTitle ? 'Centered small-capitals title following a heading with separating whitespace'
+          : isolatedTitle ? 'Centered title casing, separating whitespace and distinct size'
         : heading ? 'Numbering, tag or representative typography' : label ? 'Repeated speaker pattern in dramatic context'
           : direction ? 'Stage cue with placement/style and dramatic context' : role === 'line-group' ? 'Preserved source lines; verse/prose uncertain' : 'Local spacing and indentation'],
       align: centered && (heading || direction) ? 'center' : 'start', indent, lines: [line], speaker: label?.[1] ?? null });
@@ -417,6 +439,7 @@ function overlapping(entries, start, end) {
 
 /** Adapter to the existing Contents evidence contract, preserving PDF y values. */
 export function structureLines(layout) {
+  const lineBlocks = new Map(layout.blocks.flatMap(block => block.lines.map(line => [line.id, block])));
   const excluded = new Set(layout.blocks.filter(b => ['speech', 'stage-direction', 'caption', 'footnote', 'unknown'].includes(b.role)
     || b.role === 'line-group' && b.association).flatMap(b => b.lines.map(l => l.id)));
   const lists = new Set(layout.blocks.filter(b => b.role === 'list').flatMap(b => b.lines.map(l => l.id)));
@@ -431,6 +454,8 @@ export function structureLines(layout) {
   return layout.lines.filter(l => Math.abs(l.angle) < .08).map(line => {
     const fullEntries = full.get(line.rowId);
     return { text: layout.projection.text.slice(line.start, line.end), y: line.sourceY, size: line.size,
+      role: lineBlocks.get(line.id)?.role, sourceLineId: line.id, regionId: line.regionId,
+      ...(lineBlocks.get(line.id)?.role === 'heading' ? { headingReasons: [...lineBlocks.get(line.id).reasons] } : {}),
       contentsEligible: !excluded.has(line.id) && !lists.has(line.id), tocEligible: !excluded.has(line.id),
       x: Math.min(...line.runs.map(r => r.sourceX)), right: Math.max(...line.runs.map(r => r.sourceX + r.width)),
       fullEntries, fullText: clean(fullEntries.map(e => e.text).join(' ')) };

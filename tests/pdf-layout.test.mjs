@@ -6,7 +6,7 @@ import { extractPage } from '../src/pdf-engine.js';
 import { readPageLayout, clearPageLayouts } from '../src/pdf-layout-adapter.js';
 import { analyzeDocumentStructure } from '../src/document-structure.js';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { makeLayoutPdf, layoutPages } from './pdf-layout-fixture.mjs';
+import { makeLayoutPdf, layoutPages, modestHeadingPages } from './pdf-layout-fixture.mjs';
 
 const item = (str, x, y, size = 10, width = str.length * size * .45, extra = {}) => ({ str, width, transform: [size, 0, 0, size, x, y], ...extra });
 const layout = items => interpretPage({ items });
@@ -95,6 +95,7 @@ test('structural words in wrapped prose do not invent headings or break paragrap
     'book of stories and ordinary examples remains body text.', 'section of the narrative continues at the same measure.',
     'section a reader remembers is still ordinary prose.',
     'chapter about an ordinary afternoon continues here.', 'appendix of supporting material is mentioned in prose.',
+    'book I read yesterday', 'part one of their load',
     'book civil life describes is still an ordinary sentence.'];
   const result = layout(source.map((str, index) => item(str, 40, 700 - index * 14, 10, 440)));
   assert.equal(result.blocks.length, 1);
@@ -108,7 +109,7 @@ test('structural words in wrapped prose do not invent headings or break paragrap
   valid(result);
 });
 
-for (const title of ['Chapter One', 'PART TWENTY-ONE', 'Book 2: An Opening', 'Section 2.3 A New Topic',
+for (const title of ['Book I', 'Chapter One', 'Chapter One: The Beginning', 'PART TWENTY-ONE', 'Book 2: An Opening', 'Section 2.3 A New Topic',
   'Chapter IV', 'Part xii', 'Section A', 'Section B: Scope', 'Appendix A', 'Appendix III']) test(`numbered heading retains its role: ${title}`, () => {
   const result = layout([item(title, 40, 730), item('Ordinary body prose establishes the page measure.', 40, 690, 10, 440)]);
   assert.equal(result.blocks[0].role, 'heading');
@@ -123,6 +124,59 @@ test('unnumbered structural titles can still use validated tags or prominent typ
   const tagged = interpretPage({ items: [{ type: 'beginMarkedContentProps', id: 'title' }, item('Book of Stories', 40, 730),
     { type: 'endMarkedContent' }] }, { structTree: { role: 'H1', children: [{ type: 'content', id: 'title' }] } });
   assert.equal(tagged.tags.status, 'validated'); assert.equal(tagged.blocks[0].role, 'heading'); valid(tagged);
+});
+
+const modestLayout = page => interpretPage({ items: page.items.map(run => item(run.text, run.x, run.y, run.size, run.width)) }, { view: page.view });
+for (const [index, page] of modestHeadingPages.entries()) test(`modest-size titles use placement, casing, spacing and title sequence (${index})`, () => {
+  const result = modestLayout(page);
+  assert.equal(result.bodySize, index ? 9.8 : 8.85);
+  const expected = page.items.slice(10, index ? 12 : 11).map(run => run.text);
+  assert.deepEqual(result.blocks.filter(block => block.role === 'heading').map(block => block.lines[0].text), expected);
+  for (const heading of structureLines(result).filter(line => line.role === 'heading')) {
+    const sourceLine = result.lines.find(line => line.id === heading.sourceLineId);
+    assert.equal(heading.regionId, sourceLine.regionId);
+    assert.equal(heading.text, sourceLine.text);
+    assert.ok(heading.headingReasons.some(reason => /Centered/.test(reason)));
+    assert.deepEqual(sourceAt(result.projection, sourceLine.start), { item: sourceLine.runs[0].index, offset: 0 });
+  }
+  assert.deepEqual(result.runs.map(run => run.text), page.items.map(run => run.text));
+  valid(result);
+});
+
+test('installed PDF.js retains modest headings at the audited page size and baselines', async () => {
+  const task = getDocument({ data: makeLayoutPdf(modestHeadingPages), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    for (const [index, page] of modestHeadingPages.entries()) {
+      const result = await readPageLayout(pdf, index + 1);
+      const headings = result.blocks.filter(block => block.role === 'heading');
+      const titles = page.items.slice(10, index ? 12 : 11);
+      assert.deepEqual(headings.map(block => block.lines[0].text), titles.map(run => run.text.replace(/'/g, '’')));
+      assert.equal(result.width, 248.4); assert.equal(result.height, 425.52);
+      assert.ok(result.lines.every(line => line.x >= 0 && line.right <= result.width), 'fixture text must fit the actual PDF page');
+      for (const [titleIndex, block] of headings.entries()) {
+        const line = block.lines[0]; const original = titles[titleIndex];
+        assert.ok(Math.abs(line.x - original.x) < .001);
+        assert.ok(Math.abs(line.baseline - (425.52 - original.y)) < .001);
+        assert.equal(line.size, original.size);
+        assert.deepEqual(sourceAt(result.projection, line.start), { item: line.runs[0].index, offset: 0 });
+      }
+      valid(result);
+    }
+  } finally { await task.destroy(); }
+});
+
+for (const [name, change] of [
+  ['body margin', page => { page.items[10].x = 9; }],
+  ['ordinary spacing above', page => { page.items[9].y = page.items[10].y + 11.2; }],
+  ['ordinary spacing below', page => { page.items[11].y = page.items[10].y - 11.2; }],
+  ['sentence casing', page => { page.items[10].text = "Zarathustra's speeches continue"; }],
+  ['body size', page => { page.items[10].size = 9.8; }],
+]) test(`near-identical prose lacks title evidence: ${name}`, () => {
+  const page = structuredClone(modestHeadingPages[1]); change(page);
+  const result = modestLayout(page);
+  assert.ok(result.blocks.every(block => block.role !== 'heading'));
+  assert.ok(text(result).includes(page.items[10].text)); valid(result);
 });
 
 test('neutral verse keeps source lines and stanza gaps without freezing prose', () => {

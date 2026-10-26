@@ -58,3 +58,24 @@ export const layoutPages = [
   ] },
   { items: [{ text: 'A very long original source line '.repeat(40), x: 40, y: 700, size: 10, matrix: '.07 0 0 1 40 700' }, { text: 'Next source line remains separate.', x: 40, y: 680, size: 10 }] },
 ];
+
+// Original prose at the audited page size and title/neighbor coordinates.
+// The OCR-shaped title strings are intentional; layout must not rewrite them.
+export const modestHeadingPages = [
+  { view: [0, 0, 248.4, 425.52], items: [
+    ...Array.from({ length: 10 }, (_, index) => ({ text: `Ordinary discussion line ${index + 1} continues across the page.`,
+      x: 9, y: 425.52 - (125.92 + index * 11.2), size: 8.85, width: 231 })),
+    { text: "Zarathustra's Prologu e", x: 59.77, y: 425.52 - 265.75, size: 10.9, width: 126.62 },
+    { text: '1', x: 121.56, y: 425.52 - 286.82, size: 8.85, width: 4.02 },
+    ...Array.from({ length: 4 }, (_, index) => ({ text: `The new narrative line ${index + 1} continues across the page.`,
+      x: 9, y: 425.52 - (299.96 + index * 11.2), size: 9.8, width: 231 })),
+  ] },
+  { view: [0, 0, 248.4, 425.52], items: [
+    ...Array.from({ length: 10 }, (_, index) => ({ text: `The earlier narrative line ${index + 1} continues across the page.`,
+      x: 9, y: 425.52 - (162.05 + index * 11.2), size: 9.8, width: 231 })),
+    { text: "Zarathustra's Sp eeches", x: 59.17, y: 425.52 - 303.01, size: 10.9, width: 129.08 },
+    { text: 'O N T H E T H R E E M E T A M O R P H O S E S', x: 44.53, y: 425.52 - 324.68, size: 6.1, width: 159.129 },
+    ...Array.from({ length: 4 }, (_, index) => ({ text: `The next narrative line ${index + 1} continues across the page.`,
+      x: 9, y: 425.52 - (341.69 + index * 11.2), size: 9.8, width: 231 })),
+  ] },
+];
