@@ -150,6 +150,96 @@ test('repeated modest titles preserve the first credible opening and its smaller
   }
 });
 
+test('adjacent body-sized outline title supplies one chapter identity and retains its numbered sections', async () => {
+  const doc = pdf({ count: 1, outline: [{ title: 'Part I: Context', dest: [0, { name: 'XYZ' }, null, 760], items: [
+    { title: 'The First Light', dest: [0, { name: 'XYZ' }, null, 680] },
+    { title: '1.1 Sample Spaces', dest: [0, { name: 'XYZ' }, null, 620] },
+  ] }], pageText: () => [item('Part I: Context', 30, 760, 28), item('CHAPTER ONE', 30, 720, 22),
+    item('The First Light', 30, 680, 14), item('1.1 Sample Spaces', 30, 620, 18), item('Original body prose.', 30, 580, 14)] });
+  const initial = await readDocumentStructure(doc);
+  const result = await analyzeDocumentStructure(doc, { initial });
+  assert.equal(result.nodes.length, 3);
+  const [part, chapter, section] = result.nodes;
+  assert.deepEqual(result.nodes.map((node) => node.id), initial.nodes.map((node) => node.id));
+  assert.deepEqual(result.nodes.map((node) => node.title), ['Part I: Context', 'The First Light', '1.1 Sample Spaces']);
+  assert.equal(chapter.kind, 'chapter');
+  assert.equal(chapter.chapterNumber, '1');
+  assert.equal(chapter.parentId, part.id);
+  assert.equal(chapter.y, 720);
+  assert.equal(section.parentId, part.id, 'the explicit outline subsection parent is preserved');
+  assert.ok(chapter.titleSourceLineId);
+});
+
+test('a reconciled named outline chapter retains its ordinal for inferred decimal sections', async () => {
+  const doc = pdf({ count: 2, outline: [{ title: 'The First Light', dest: [0] }], pageText: (number) => number === 1 ? [
+    item('CHAPTER ONE', 30, 720, 22), item('The First Light', 30, 680, 14), item('Original body prose.', 30, 640, 14),
+  ] : [item('1.1 First section', 30, 720, 18), ...Array.from({ length: 4 }, (_, index) => item('Original body prose.', 30, 670 - index * 20, 10))] });
+  const result = await analyzeDocumentStructure(doc);
+  const chapter = result.nodes.find((node) => node.kind === 'chapter');
+  const section = result.nodes.find((node) => node.kind === 'section');
+  assert.equal(chapter.title, 'The First Light');
+  assert.equal(chapter.chapterNumber, '1');
+  assert.equal(section.parentId, chapter.id);
+});
+
+test('split chapter reconciliation requires adjacency, bounded geometry, matching title and matching destination', async () => {
+  for (const variant of ['distant', 'column', 'intervening', 'different-title', 'different-destination']) {
+    const titleY = variant === 'distant' ? 600 : 680;
+    const outlineTitle = variant === 'different-title' ? 'Another Opening' : 'The First Light';
+    const doc = pdf({ count: 1, outline: [{ title: outlineTitle, dest: [0, { name: 'XYZ' }, null, variant === 'different-destination' ? 400 : titleY] }],
+      pageText: () => [item('CHAPTER ONE', 30, 720, 22),
+        ...(variant === 'intervening' ? [item('A sentence intervenes.', 30, 700, 14)] : []),
+        item('The First Light', variant === 'column' ? 400 : 30, titleY, 14), item('Original body prose.', 30, 550, 14)] });
+    const initial = await readDocumentStructure(doc);
+    const result = await analyzeDocumentStructure(doc, { initial });
+    const outline = result.nodes.find((node) => node.id === initial.nodes[0].id);
+    assert.equal(outline.title, outlineTitle, variant);
+    assert.equal(outline.kind, 'heading', variant);
+    assert.equal(outline.y, variant === 'different-destination' ? 400 : titleY, variant);
+    assert.ok(result.nodes.some((node) => node.kind === 'chapter' && node.id !== outline.id), variant);
+  }
+});
+
+test('conflicting chapter ordinals cannot pair, merge or corroborate a shared title', async () => {
+  for (const y of [680, null]) for (const size of [22, 14]) {
+    const doc = pdf({ count: 1, outline: [{ title: 'Chapter Two: Arrival', dest: y == null ? [0] : [0, { name: 'XYZ' }, null, y] }],
+      pageText: () => [item('CHAPTER ONE', 30, 720, size), item('Arrival', 30, 680, 14),
+        ...Array.from({ length: 5 }, (_, index) => item('Original body prose.', 30, 640 - index * 20, 11))] });
+    const initial = await readDocumentStructure(doc);
+    const result = await analyzeDocumentStructure(doc, { initial });
+    const outline = result.nodes.find((node) => node.id === initial.nodes[0].id);
+    assert.deepEqual(outline, initial.nodes[0], `outline anchor ${y}, source size ${size}`);
+    if (size === 22) assert.ok(result.nodes.some((node) => node.source === 'headings' && node.title === 'Chapter ONE: Arrival' && node.y === 720));
+    else {
+      assert.equal(result.nodes.length, 1);
+      assert.ok(result.candidates.some((node) => node.title === 'Chapter ONE: Arrival'));
+    }
+  }
+});
+
+test('equivalent Roman and written chapter ordinals reconcile while preserving the outline title', async () => {
+  for (const title of ['Chapter II: Arrival', 'Chapter Two: Arrival']) {
+    const doc = pdf({ count: 1, outline: [{ title, dest: [0, { name: 'XYZ' }, null, 680] }],
+      pageText: () => [item('CHAPTER TWO', 30, 720, 22), item('Arrival', 30, 680, 14), item('Original body prose.', 30, 640, 14)] });
+    const initial = await readDocumentStructure(doc);
+    const result = await analyzeDocumentStructure(doc, { initial });
+    assert.equal(result.nodes.length, 1);
+    assert.equal(result.nodes[0].id, initial.nodes[0].id);
+    assert.equal(result.nodes[0].title, title);
+    assert.equal(result.nodes[0].chapterNumber, '2');
+    assert.equal(result.nodes[0].y, 720);
+  }
+});
+
+test('adjacent distinct Part, Chapter and subsection headings are never concatenated', async () => {
+  const doc = pdf({ count: 1, pageText: () => [item('Part I', 30, 740, 28), item('Chapter One', 30, 710, 22),
+    item('1.1 First section', 30, 680, 18), ...Array.from({ length: 5 }, (_, index) => item('Original body prose.', 30, 630 - index * 20, 10))] });
+  const result = await analyzeDocumentStructure(doc);
+  assert.deepEqual(result.nodes.map((node) => node.title), ['Part I', 'Chapter One', '1.1: First section']);
+  assert.equal(result.nodes[1].parentId, result.nodes[0].id);
+  assert.equal(result.nodes[2].parentId, result.nodes[1].id);
+});
+
 test('inferred chapters and decimal sections attach beneath the applicable outline part', async () => {
   const doc = pdf({ count: 5, outline: [{ title: 'Part One', dest: [0] }], pageText: (n) => {
     if (n === 2) return [item('Chapter 1: Arrival', 30, 720, 20), item('Text.', 30, 680)];

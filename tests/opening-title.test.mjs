@@ -52,3 +52,12 @@ test('a confirmed mid-page source heading stays at its source position without a
   assert.match(layout.projection.text, /^Body prose/);
   assert.deepEqual(conservation(layout), { valid: true, errors: [] });
 });
+
+test('a subtitle-only outline matches a numbered source heading without erasing conflicting ordinals', () => {
+  const layout = interpretPage({ items: [item('Chapter II: A Slower Morning', 730, 22), item('The next chapter begins here.', 680)] });
+  assert.equal(hasSourceChapterTitle(layout, 'A Slower Morning'), true);
+  assert.equal(hasSourceChapterTitle(layout, 'Chapter Two: A Slower Morning'), true);
+  assert.equal(hasSourceChapterTitle(layout, 'Chapter I: A Slower Morning'), false);
+  assert.equal(hasSourceChapterTitle(layout, 'A Different Morning'), false);
+  assert.deepEqual(conservation(layout), { valid: true, errors: [] });
+});

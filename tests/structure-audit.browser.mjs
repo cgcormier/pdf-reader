@@ -1,6 +1,6 @@
 /**
  * Real file-import/render acceptance checks, each selectable by audit issue.
- * node tests/structure-audit.browser.mjs [6|9|10|12|all]
+ * node tests/structure-audit.browser.mjs [6|9|10|12|13|all]
  * Owns a fresh retained Chrome profile and a random loopback Vite origin.
  */
 import assert from 'node:assert/strict';
@@ -15,8 +15,8 @@ import { makeProseAuditPdf, makeOpeningAuditPdf, proseLines } from './audit-fixt
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const issues = process.argv.slice(2).map(value => value.replace(/^#/, ''));
-const selected = !issues.length || issues.includes('all') ? ['6', '9', '10', '12'] : issues;
-assert.ok(selected.every(issue => ['6', '9', '10', '12'].includes(issue)), 'Supported issues: 6, 9, 10, 12, all');
+const selected = !issues.length || issues.includes('all') ? ['6', '9', '10', '12', '13'] : issues;
+assert.ok(selected.every(issue => ['6', '9', '10', '12', '13'].includes(issue)), 'Supported issues: 6, 9, 10, 12, 13, all');
 const artifacts = path.join(root, 'output', 'playwright', 'structure-reconciliation');
 await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
@@ -319,6 +319,81 @@ async function modestHeadings(page) {
   report.push('PASS #10: three modest source headings retain exact text and anchors; two Contents roots and their small-capitals section navigate in both layouts without duplicate mid-page titles.');
 }
 
+async function chapterReconciliation(page) {
+  for (const [name, bytes, label] of [
+    ['Reconciled sample.pdf', await readFile(path.join(root, 'public', 'sample.pdf')), 'sample'],
+    ['Reconciled prefatory.pdf', makeOpeningAuditPdf(), 'prefatory'],
+  ]) {
+    await importPdf(page, name, bytes);
+    const book = await savedBook(page);
+    const outlines = await page.evaluate(async () => {
+      const { getBook } = await import('/src/storage.js');
+      const { openPdf } = await import('/src/pdf-engine.js');
+      const { readDocumentStructure } = await import('/src/document-structure.js');
+      const book = await getBook(JSON.parse(localStorage.getItem('folio:active-book')));
+      const pdf = await openPdf(book.bytes.slice(0));
+      try { return (await readDocumentStructure(pdf)).nodes.filter(node => node.source === 'outline'); }
+      finally { await pdf.loadingTask.destroy(); }
+    });
+    const expected = label === 'sample' ? [
+      ['The First Light', 1, 735, 'chapter'], ['A quiet continuation.', 2, 735, 'heading'], ['A Slower Morning', 3, 735, 'chapter'],
+    ] : [['The First Light', 1, 715, 'chapter']];
+    assert.deepEqual(book.structure.nodes.map(node => [node.title, node.page, node.y, node.kind]), expected, `${label}: duplicate or inconsistent chapter nodes`);
+    assert.ok(book.structure.nodes.every(node => node.parentId === null), `${label}: unjustified chapter hierarchy`);
+    for (const outline of outlines) {
+      const reconciled = book.structure.nodes.find(node => node.id === outline.id);
+      assert.ok(reconciled, `${label}: original outline identity lost`);
+      assert.equal(reconciled.title, outline.title, `${label}: original outline title changed`);
+    }
+    assert.deepEqual(book.structure.nodes.filter(node => node.kind === 'chapter').map(node => node.chapterNumber), label === 'sample' ? ['1', '2'] : ['1']);
+    assert.deepEqual(book.chapters.map(chapter => [chapter.title, chapter.page, chapter.kind]), expected.map(([title, sourcePage, , kind]) => [title, sourcePage, kind]), `${label}: stored chapter metadata disagrees with Contents`);
+    assert.equal(await page.locator('[data-node-id]').count(), expected.length, `${label}: duplicate rendered Contents rows`);
+    assert.deepEqual(await page.locator('[data-node-id] .chapter-label').allTextContents(), expected.map(([title]) => title));
+    for (const mode of ['pages', 'scroll']) {
+      await page.locator(`#${mode}-layout`).click(); await settled(page);
+      for (const node of book.structure.nodes) {
+        await page.locator(`[data-node-id="${node.id}"]`).click(); await settled(page);
+        await waitForBook(page, current => current.bookPosition?.contentsId === node.id && current.bookPosition.source);
+        // Scroll captures the visible source after its final layout callback.
+        if (mode === 'scroll') await new Promise(resolve => setTimeout(resolve, 800));
+        const before = await savedBook(page);
+        assert.equal(before.page, node.page);
+        assert.equal(await page.locator('#current-chapter').textContent(), node.title);
+        assert.equal(await page.locator(`[data-node-id="${node.id}"]`).getAttribute('aria-current'), 'location');
+        const prose = page.locator(mode === 'pages' ? `#book-spread .paper-page[data-source-page="${node.page}"] .page-prose` : `.scroll-page[data-source-page="${node.page}"] .page-prose`);
+        const displayed = (await prose.allTextContents()).join(' ').replace(/\s+/g, ' ');
+        assert.equal(displayed.split(node.title).length - 1, 1, `${label} ${mode}: canonical chapter title duplicated or missing`);
+        assert.equal(await prose.locator('.chapter-intro').count(), 0, `${label} ${mode}: injected chapter intro disagrees with source opening`);
+        if (label === 'prefatory' && mode === 'scroll') await capture(page, '13', 'prefatory-scroll-before-reload');
+        await page.reload();
+        await page.waitForFunction(() => !document.querySelector('#modal').open && document.querySelector('#book-type').textContent === 'FROM YOUR SHELF');
+        await settled(page);
+        if (mode === 'scroll') await new Promise(resolve => setTimeout(resolve, 800));
+        const after = await savedBook(page);
+        if (JSON.stringify(after.bookPosition.source) !== JSON.stringify(before.bookPosition.source)) {
+          await writeFile(path.join(runDirectory, `issue-13-${label}-${mode}-anchor.json`), JSON.stringify({
+            before: before.bookPosition, after: after.bookPosition,
+            geometry: await page.locator('#scroll-stage').evaluate(stage => ({ top: stage.getBoundingClientRect().top,
+              scrollTop: stage.scrollTop, blocks: [...stage.querySelectorAll('.layout-block')].map(block => ({
+                text: block.textContent.slice(0, 80), start: block.dataset.layoutStart,
+                top: block.getBoundingClientRect().top, bottom: block.getBoundingClientRect().bottom,
+              })) })),
+          }, null, 2));
+        }
+        assert.equal(after.page, before.page, `${label} ${mode}: selected destination moved page`);
+        assert.deepEqual(after.bookPosition.source, before.bookPosition.source, `${label} ${mode}: selected source anchor changed`);
+        assert.equal(after.bookPosition.contentsId, node.id, `${label} ${mode}: selected destination ID lost`);
+        assert.equal(await page.locator(`[data-node-id="${node.id}"]`).getAttribute('aria-current'), 'location', `${label} ${mode}: selected Contents row not restored`);
+        assert.equal(await page.locator('#current-chapter').textContent(), node.title);
+        assert.deepEqual(after.structure.nodes, book.structure.nodes, `${label}: reload changed reconciled identities`);
+        assert.deepEqual(Buffer.from(after.bytes), Buffer.from(book.bytes), `${label}: reconciliation changed original bytes`);
+      }
+      await capture(page, '13', `${label}-${mode}`);
+    }
+    report.push(`PASS #13 ${label}: coherent chapter titles and Contents preserve outline IDs; every destination restores selection and source anchor in both layouts without changing PDF bytes.`);
+  }
+}
+
 try {
   await server.listen();
   const address = server.httpServer.address();
@@ -336,7 +411,7 @@ try {
     await page.goto(`${origin}/`);
     await page.locator('#file-input').waitFor({ state: 'attached' });
     try {
-      await ({ 6: scannerBookmarks, 9: proseHeadings, 10: modestHeadings, 12: openingTitles }[issue])(page);
+      await ({ 6: scannerBookmarks, 9: proseHeadings, 10: modestHeadings, 12: openingTitles, 13: chapterReconciliation }[issue])(page);
     } catch (error) {
       await capture(page, issue, 'failure');
       throw error;

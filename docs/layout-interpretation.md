@@ -8,7 +8,7 @@
 
 ## October 26 outline classification
 
-Detector snapshots now use version 7. Dense numeric scanner outlines are retained
+Detector snapshots now use version 8. Dense numeric scanner outlines are retained
 in `structure.pageNavigation`, separate from semantic Contents nodes. The reader
 exposes their original destinations under PDF page bookmarks. Sparse numeric and
 Roman chapter outlines remain semantic. Upgrading a saved scan also refreshes
@@ -20,6 +20,12 @@ evidence shared by Book rendering and Contents. Smaller capitalized subtitles
 can remain children of their adjacent title. Source OCR spelling and anchors are
 preserved. Matching source titles suppress generated intros, including titles
 after a chapter-number or prefatory line and confirmed mid-page headings.
+
+Adjacent chapter numbers and matching outline titles now share the original
+outline identity and title, with the source number retained separately. Pairing
+requires compatible ordinals, region, alignment and destination geometry;
+distinct same-page headings remain separate. Scroll restoration measures loaded
+pages before resolving source anchors, avoiding drift from estimated page heights.
 
 ## October 23 review fixes
 

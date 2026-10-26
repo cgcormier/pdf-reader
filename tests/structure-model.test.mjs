@@ -23,6 +23,19 @@ test('automatic same-page hierarchy, selection and typography stay intact', () =
   assert.deepEqual(chaptersFromNodes(result).map(n=>n.title),['Opening pages','Chapter 1']);
   assert.equal(nodes[0].title,'Part I');
 });
+
+test('named chapter ordinals survive an intervening generic heading in book typography', () => {
+  const result = chaptersFromNodes([
+    { title: 'The First Light', kind: 'chapter', page: 1, chapterNumber: '1' },
+    { title: 'A quiet continuation.', kind: 'heading', page: 2 },
+    { title: 'A Slower Morning', kind: 'chapter', page: 3, chapterNumber: '2' },
+  ]);
+  assert.deepEqual(result, [
+    { title: 'The First Light', kind: 'chapter', page: 1, chapterNumber: '1' },
+    { title: 'A quiet continuation.', kind: 'heading', page: 2 },
+    { title: 'A Slower Morning', kind: 'chapter', page: 3, chapterNumber: '2' },
+  ]);
+});
 test('legacy automatic chapters remain readable while awaiting a scan', () => {
   const legacy=structureFromLegacy([{title:'Opening',page:1}],200);
   assert.equal(legacy.status,'pending'); assert.equal(legacy.nodes[0].source,'legacy');

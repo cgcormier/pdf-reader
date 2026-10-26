@@ -1,6 +1,6 @@
 import { readPageLayout } from './pdf-layout-adapter.js';
 import { structureLines } from './pdf-layout.js';
-export const STRUCTURE_VERSION = 7;
+export const STRUCTURE_VERSION = 8;
 
 const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
@@ -43,12 +43,16 @@ function sectionNumber(title) {
   const match = clean(title).match(/^(?:section\s+)?(\d+(?:\.\d+)+)\b/i);
   return match ? match[1].split('.').map((part) => String(Number(part))) : null;
 }
-function chapterNumber(title) {
+export function chapterNumber(title) {
   const match = clean(title).match(/^(?:chapter|book)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|\d+|[ivxlcdm]{1,12})\b/i);
   if (!match) return null;
   const words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
   const wordIndex = words.indexOf(match[1].toLowerCase());
   return wordIndex >= 0 ? String(wordIndex + 1) : String(Number(match[1]) || romanNumber(match[1]) || match[1]).toLowerCase();
+}
+function compatibleChapterTitles(title, other) {
+  const a = chapterNumber(title); const b = chapterNumber(other);
+  return !a || !b || a === b;
 }
 function baseNode({ title, parentId = null, page, y = null, source, confidence, evidence = [], level, kind, pageLabel }) {
   const inferred = classify(title);
@@ -181,6 +185,13 @@ function explicitHeading(text) {
   if (tail && !/^\p{Lu}/u.test(tail)) return null;
   return { title: `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}${tail ? `: ${tail}` : ''}`, bare: !tail };
 }
+function adjacentHeadingTitle(line, next) {
+  if (!next || next.contentsEligible === false || next.regionId !== line.regionId || explicitHeading(next.text) || playHeading(next.text)
+    || next.text !== next.fullText || line.text !== line.fullText || next.text.length > 110 || !/^\p{Lu}/u.test(next.text)) return false;
+  const gap = line.y - next.y;
+  const aligned = Math.abs(line.x - next.x) <= line.size || Math.abs((line.x + line.right - next.x - next.right) / 2) <= line.size;
+  return aligned && gap > 2 && gap < Math.max(line.size * 3, 28);
+}
 function parseTocEntry(items) {
   if (!items?.length) return null;
   const fullText = clean(items.map((item) => item.text).join(' '));
@@ -229,7 +240,8 @@ function pageLabelMap(labels) {
 }
 function mergeNode(nodes, node) {
   const key = titleKey(node.title);
-  const existing = nodes.find((n) => titleKey(n.title) === key && n.page === node.page && (n.y == null || node.y == null || Math.abs(n.y - node.y) < 3));
+  const existing = nodes.find((n) => titleKey(n.title) === key && compatibleChapterTitles(n.title, node.title)
+    && n.page === node.page && (n.y == null || node.y == null || Math.abs(n.y - node.y) < 3));
   if (!existing) { nodes.push(node); return node; }
   const rank = { fallback: 0, headings: 1, toc: 2, outline: 3 };
   if (rank[node.source] > rank[existing.source]) {
@@ -325,13 +337,24 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
             if (/^(?:act|scene)\b/i.test(line.text)) continue;
             if (looksRunning(line, page.view)) continue;
             let parsed = explicitHeading(line.text); let display = parsed?.title; let y = line.y;
+            let pairedOutlineId = null; let titleSourceLineId = null;
             if (parsed?.bare) {
               const next = lines[i + 1];
-              if (next && next.text.length <= 110 && next.size >= bodyMedian * 1.12 && line.y - next.y < Math.max(line.size * 3, 28) && /^\p{Lu}/u.test(next.text)) { display = `${parsed.title}: ${next.text}`; consumedTitleLines.add(i + 1); }
+              const adjacent = adjacentHeadingTitle(line, next) && !looksRunning(next, page.view);
+              const matchingOutline = adjacent && classify(parsed.title).kind === 'chapter' ? state._outlineNodes.filter((node) => node.source === 'outline'
+                && ['heading', 'chapter'].includes(node.kind) && node.page === pageNumber && titleKey(node.title) === titleKey(next.text)
+                && compatibleChapterTitles(node.title, parsed.title)
+                && (node.y == null || Math.abs(node.y - next.y) < 3 || Math.abs(node.y - line.y) < 3)) : [];
+              if (matchingOutline.length === 1) pairedOutlineId = matchingOutline[0].id;
+              if (adjacent && (pairedOutlineId || next.size >= bodyMedian * 1.12)) {
+                display = `${parsed.title}: ${next.text}`; titleSourceLineId = next.sourceLineId; consumedTitleLines.add(i + 1);
+              }
               else if (line.size < bodyMedian * 1.22) display = null;
             }
             if (display) {
-              const evidence = { title: display, page: pageNumber, y, size: line.size, median: bodyMedian, style: `${Math.round(line.size / Math.max(1, bodyMedian) * 10) / 10}:${Math.round(line.x / 25)}`, explicit: true, evidence: ['Explicit numbered heading'] };
+              const evidence = { title: display, page: pageNumber, y, size: line.size, median: bodyMedian, style: `${Math.round(line.size / Math.max(1, bodyMedian) * 10) / 10}:${Math.round(line.x / 25)}`, explicit: true,
+                sourceLineId: line.sourceLineId, regionId: line.regionId, titleSourceLineId, pairedOutlineId,
+                evidence: ['Explicit numbered heading', ...(pairedOutlineId ? ['Adjacent source chapter number and title corroborate the outline destination'] : [])] };
               if (!state._headingEvidence.some((h) => h.page === pageNumber && titleKey(h.title) === titleKey(display) && Math.abs(h.y - y) < 2)) state._headingEvidence.push(evidence);
             }
             else if ((line.size >= bodyMedian * 1.45 || line.role === 'heading') && line.text.length >= 4 && line.text.length <= 90 && !/^\d+$/.test(line.text) && !/^(?:figure|fig\.|table|plate|copyright|contents|chapter|part|section)\b/i.test(line.text)) {
@@ -390,6 +413,8 @@ function anchorOrder(a, b) {
   return ay === by ? (a.level ?? 0) - (b.level ?? 0) : by - ay;
 }
 function titlesMatch(title, target) {
+  // Normalizing away a chapter label must not erase conflicting ordinals.
+  if (!compatibleChapterTitles(title, target)) return false;
   const a = playHeading(title); const b = playHeading(target);
   if (a || b) return Boolean(a && b && a.family === b.family && a.number === b.number);
   const key = titleKey(target); const other = titleKey(title);
@@ -482,16 +507,28 @@ function finalize(state, labels) {
   const outlineCorroborates = (h) => nodes.some((node) => node.source === 'outline' && node.page === h.page
     && titlesMatch(node.title, h.title));
   const layoutParents = new Map();
+  const headingSizes = new Map();
   for (const h of headings) {
     const info = headingInfo.find((value) => value.h === h);
     if (repeatedRunning(h)) continue;
-    const corroborated = tocMatchedHeadings.has(h) || outlineCorroborates(h);
+    const corroborated = tocMatchedHeadings.has(h) || outlineCorroborates(h) || h.pairedOutlineId;
     if (!info.credible && !corroborated) {
       state.candidates.push(makeCandidate({ title: h.title, page: h.page, y: h.y, source: 'headings', evidence: [...h.evidence, info.prominent ? 'No outline, contents, or repeated-style corroboration' : 'Typography is close to body text'], pageLabel: labels?.[h.page - 1] })); continue;
     }
     const node = baseNode({ title: h.title, page: h.page, y: h.y, source: 'headings', confidence: info.credible ? 'high' : 'medium', evidence: h.evidence, pageLabel: labels?.[h.page - 1] || undefined });
-    const merged = mergeNode(nodes, node);
+    const pairedOutline = nodes.find((candidate) => candidate.id === h.pairedOutlineId);
+    const merged = pairedOutline ?? mergeNode(nodes, node);
+    if (pairedOutline) {
+      // The outline owns the identity/title; adjacent source lines locate the
+      // chapter opening even when the outline points at its second title line.
+      merged.y = h.y; merged.evidence = [...new Set([...merged.evidence, ...h.evidence])];
+    }
+    if (node.kind === 'chapter' && merged.source === 'outline') {
+      merged.kind = 'chapter'; merged.level = node.level; merged.chapterNumber = chapterNumber(h.title);
+    }
+    headingSizes.set(merged.id, h.size);
     if (h.sourceLineId) { merged.sourceLineId = h.sourceLineId; merged.regionId = h.regionId; }
+    if (h.titleSourceLineId) merged.titleSourceLineId = h.titleSourceLineId;
     if (h.layoutParentLineId) { merged.kind = 'section'; layoutParents.set(merged.id, h.layoutParentLineId); }
   }
   for (const { entry, page, heading } of resolvedToc) {
@@ -546,11 +583,12 @@ function finalize(state, labels) {
       }
       if (!parent && number?.length === 2) {
         const chapterId = number[0];
-        parent = [...eligible].reverse().find((candidate) => candidate.kind === 'chapter' && chapterNumber(candidate.title) === chapterId);
+        parent = [...eligible].reverse().find((candidate) => candidate.kind === 'chapter' && (candidate.chapterNumber ?? chapterNumber(candidate.title)) === chapterId);
       }
       if (!parent) parent = [...eligible].reverse().find((candidate) => candidate.kind === 'chapter' || candidate.kind === 'appendix');
     }
-    else parent = [...eligible].reverse().find((candidate) => ['part', 'chapter', 'section'].includes(candidate.kind));
+    else parent = [...eligible].reverse().find((candidate) => ['part', 'chapter', 'section'].includes(candidate.kind)
+      && (!headingSizes.has(node.id) || !headingSizes.has(candidate.id) || headingSizes.get(node.id) < headingSizes.get(candidate.id) * .95));
     if (parent) {
       node.parentId = parent.id;
       node.level = Math.max(node.level, parent.level + 1);

@@ -8,6 +8,31 @@ import { makeStructurePdf, makePlayPdf } from './structure-fixture.mjs';
 import { makeLayoutPdf, modestHeadingPages } from './pdf-layout-fixture.mjs';
 import { readPageLayout } from '../src/pdf-layout-adapter.js';
 import { conservation } from '../src/pdf-layout.js';
+import { makeOpeningAuditPdf } from './audit-fixtures.mjs';
+import { activeStructureNode, structureNodes, structurePath } from '../src/structure-model.js';
+
+for (const fixture of ['sample', 'prefatory']) test(`real PDF.js reconciles ${fixture} chapter openings while retaining outline selection IDs`, async () => {
+  const data = fixture === 'sample' ? await readFile(new URL('../public/sample.pdf', import.meta.url)) : Buffer.from(makeOpeningAuditPdf());
+  const task = getDocument({ data: new Uint8Array(data), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    const initial = await readDocumentStructure(pdf);
+    const result = await analyzeDocumentStructure(pdf, { initial });
+    const nodes = structureNodes(result);
+    assert.deepEqual(nodes.map((node) => [node.title, node.kind, node.page, node.y, node.parentId]), fixture === 'sample' ? [
+      ['The First Light', 'chapter', 1, 735, null], ['A quiet continuation.', 'heading', 2, 735, null],
+      ['A Slower Morning', 'chapter', 3, 735, null],
+    ] : [['The First Light', 'chapter', 1, 715, null]]);
+    for (const outline of initial.nodes) {
+      assert.equal(activeStructureNode(nodes, outline.page, outline.id).id, outline.id);
+      assert.deepEqual(structurePath(nodes, outline.id).map((node) => node.id), [outline.id]);
+      assert.equal(nodes.find((node) => node.id === outline.id).title, outline.title);
+    }
+    const resumed = await analyzeDocumentStructure(pdf, { initial: result });
+    assert.deepEqual(resumed.nodes, result.nodes);
+    for (let page = 1; page <= pdf.numPages; page++) assert.deepEqual(conservation(await readPageLayout(pdf, page)), { valid: true, errors: [] });
+  } finally { await task.destroy(); }
+});
 
 test('real PDF.js carries modest title layout evidence through to hierarchical Contents', async () => {
   const task = getDocument({ data: makeLayoutPdf(modestHeadingPages), verbosity: 0 });

@@ -574,7 +574,9 @@ function paperPage(number, side, offset = 0) {
     const title = el('div', 'chapter-intro');
     const heading = el('h2', 'chapter-title', chapter.title);
     heading.title = chapter.title;
-    const kicker = chapter.kind === 'appendix' ? 'APPENDIX' : (!chapter.kind || chapter.kind === 'chapter') ? `CHAPTER ${roman(book.chapters.indexOf(chapter) + 1)}` : '';
+    // Unnumbered Contents headings must not advance the chapter ordinal.
+    const chapterNumber = chapter.chapterNumber || book.chapters.filter(entry => entry.page <= number && (!entry.kind || entry.kind === 'chapter')).length;
+    const kicker = chapter.kind === 'appendix' ? 'APPENDIX' : (!chapter.kind || chapter.kind === 'chapter') ? `CHAPTER ${roman(Number(chapterNumber))}` : '';
     if (kicker) title.append(el('div', 'chapter-kicker', kicker));
     title.append(heading, el('div', 'chapter-ornament', '✦'));
     prose.append(title);
@@ -618,6 +620,9 @@ function captureScrollAnchor(number) {
 function restoreScrollAnchor(position) {
   const page = $('scroll-stage')?.querySelector(`[data-source-page="${position.page}"]`);
   if (!page?.layoutModel || !scroller || !position.source) return;
+  // Initial loading still has estimated page heights until ResizeObserver runs.
+  // Resolve the source against measured geometry before restoring its fraction.
+  scroller.reflow();
   const offset = offsetForSource(page.layoutModel.projection, position.source);
   const nodes = [...page.querySelectorAll('[data-layout-start]')];
   const node = nodes.find(n => Number(n.dataset.layoutStart) <= offset && Number(n.dataset.layoutEnd) > offset);

@@ -69,7 +69,8 @@ export function chaptersFromNodes(nodes) {
   const entries = nodes.filter(node => !['part', 'section'].includes(node.kind));
   const unique = [];
   for (const node of entries) {
-    if (!unique.some(entry => entry.page === node.page)) unique.push({ title: node.title, page: node.page, kind: node.kind });
+    if (!unique.some(entry => entry.page === node.page)) unique.push({ title: node.title, page: node.page, kind: node.kind,
+      ...(node.chapterNumber != null ? { chapterNumber: node.chapterNumber } : {}) });
   }
   if (!unique.length) unique.push({ title: 'Entire book', page: 1, kind: 'heading' });
   if (unique[0].page > 1) unique.unshift({ title: 'Opening pages', page: 1, kind: 'frontmatter' });

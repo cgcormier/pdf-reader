@@ -1,6 +1,7 @@
 import { LAYOUT_VERSION, layoutSlice, sourceAt, offsetForSource, resolveSource } from './pdf-layout.js';
 import { removeRepeatedChapterHeading } from './book-layout.js';
 import { paginateText } from './book-pagination.js';
+import { chapterNumber } from './document-structure.js';
 
 const renderIndexes = new WeakMap();
 function renderIndex(layout) {
@@ -15,12 +16,19 @@ function renderIndex(layout) {
 /** Prefer a source chapter title over an injected copy without changing offsets. */
 export function hasSourceChapterTitle(layout, title) {
   const key = value => String(value).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const subtitle = value => value.replace(/^(?:chapter|part|book|section|appendix)\s+\S+\s*[:.–—-]\s*/i, '');
   const needle = key(title);
   if (!needle) return false;
   // A confirmed mid-page heading belongs at its source position, not at the
   // start of that PDF page just because chapter navigation is page-based.
-  if (layout.blocks.some(block => block.role === 'heading'
-    && key(layout.projection.text.slice(block.start, block.end)) === needle)) return true;
+  if (layout.blocks.some(block => {
+    if (block.role !== 'heading') return false;
+    const text = layout.projection.text.slice(block.start, block.end);
+    // An outline may name just the subtitle of a numbered source heading.
+    const sourceNumber = chapterNumber(text); const targetNumber = chapterNumber(title);
+    return key(text) === needle || key(subtitle(text)) === needle
+      || sourceNumber && sourceNumber === targetNumber && key(subtitle(text)) === key(subtitle(title));
+  })) return true;
   let previous;
   let previousBlock;
   for (const block of layout.blocks.slice(0, 4)) {
