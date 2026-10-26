@@ -85,6 +85,8 @@ npm run test:desktop
 
 The desktop smoke test uses a disposable profile, checks Book-view turns and source-anchor restoration after restart, imports the sample and Hamlet PDFs, renders an original PDF page, and verifies the shelf, reading position and bookmark after another full restart. It never uses your own shelf. Set `FOLIO_EXECUTABLE` to an absolute path to an unpacked desktop executable to test the packaged app; the portable launcher does not forward the debugger pipe used by this harness. On a Linux runner without a display, set `FOLIO_HEADLESS=1`; restricted containers that cannot start Chromium's OS sandbox can additionally use `FOLIO_TEST_NO_SANDBOX=1` for that test run only. Normal launches retain the renderer sandbox.
 
+Reader-opening regressions run with `node tests/create-fixtures.mjs`, `npm run build`, then `node tests/reader-recovery.browser.mjs 7`. They use an isolated shelf to check rescan availability after completed, cancelled and failed openings, and verify that a restored book can actually scan again. Scan controls are refreshed when opening starts and ends, including completed books that need no automatic rescan. Set `RECOVERY_BROWSER_URL` to a separate development origin to run the same checks in Chromium.
+
 ### Browser development
 
 ```powershell

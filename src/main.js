@@ -259,7 +259,7 @@ function updateStructureTools() {
   const running = Boolean(structureScan?.running) || book.structure?.status === 'scanning';
   scan.hidden = running; scan.disabled = Boolean(importing);
   scan.textContent = ['cancelled', 'error'].includes(book.structure?.status) ? 'Resume scan' : book.structure?.failedPages?.length ? 'Retry unreadable pages' : 'Scan PDF again';
-  stop.hidden = !running;
+  stop.hidden = !running; stop.disabled = Boolean(importing);
 }
 async function navigateStructure(node) {
   const navigationEpoch = ++structureNavigationEpoch;
@@ -1082,6 +1082,7 @@ async function importFile(file) {
   if (file.size > 150 * 1024 * 1024) return toast('This PDF is over 150 MB. Choose a smaller copy for this simple reader.');
   const controller = new AbortController();
   importing = controller;
+  updateStructureTools();
   const status = loadingDialog(controller);
   let candidate;
   let installed = false;
@@ -1114,6 +1115,8 @@ async function importFile(file) {
     if ($('modal').open) { modalCleanup = null; $('modal').close(); }
     importing = null;
     if (installed) maybeScanStructure();
+    // Completed books do not start a scan that would otherwise refresh controls.
+    updateStructureTools();
   }
 }
 ['import-button','drop-zone'].forEach(id => $(id).addEventListener('click', () => $('file-input').click()));
@@ -1134,6 +1137,7 @@ async function loadStored(id, page) {
   let installed = false;
   const controller = new AbortController();
   importing = controller;
+  updateStructureTools();
   loadingDialog(controller);
   try {
     const stored = await getBook(id);
@@ -1151,7 +1155,13 @@ async function loadStored(id, page) {
     modalCleanup = null; $('modal').close();
     render(); persist();
   } catch (error) { if (!controller.signal.aborted) importError(error); }
-  finally { await disposePdf(candidate); importing = null; if ($('modal').open) { modalCleanup = null; $('modal').close(); } if (installed) maybeScanStructure(); }
+  finally {
+    await disposePdf(candidate);
+    importing = null;
+    if ($('modal').open) { modalCleanup = null; $('modal').close(); }
+    if (installed) maybeScanStructure();
+    updateStructureTools();
+  }
 }
 async function useDemo() {
   flushScrollSave(); stopStructureScan(); stopReadingRender(); ++epoch; selectedStructureId = null;
