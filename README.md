@@ -39,6 +39,20 @@ Chrome can also bookmark the URL or install Folio as an app when Chrome offers i
 
 There is an original eight-page reading sample on the welcome screen. **My shelf → Try a sample PDF** exercises the real import pipeline with a small bundled PDF, without selecting a local file.
 
+### When extracted text looks wrong
+
+For an imported PDF, choose **Text looks wrong?** beside the reading-layout
+controls, then **Use Original PDF** to compare or read the visible source page.
+Return with **Book view**; the last Book text position on that source page is
+retained. Both views support Scroll, and your selected view is saved per book.
+
+Book view uses the embedded text layer. OCR or encoding errors in that layer
+can disagree with the visible glyphs, such as extracted “Cod” where the page
+shows “God.” Folio preserves that input text and the original PDF bytes. It
+does not run OCR, guess corrections, or automatically rate OCR confidence.
+Original PDF is the supported recovery for unreliable text and ambiguous
+layout; obtain a better text layer outside Folio if corrected reflow is needed.
+
 ## Local storage and limits
 
 PDF bytes, automatic Contents, bookmarks and reading position are saved in IndexedDB in the current Folio or browser profile. Preferences use localStorage. No account, upload server, analytics, external fonts or cloud API. The desktop app serves only bundled files through a private `folio://app/` protocol, with a sandboxed renderer and no Node.js access from the page. The browser version's static server only serves the built app and bundled assets, and binds to loopback. It has no PDF-upload endpoint. Imported PDF content is rendered as plain text; PDF.js and its worker, fonts, character maps and WASM assets are bundled locally.

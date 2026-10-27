@@ -50,4 +50,21 @@ list work; this batch does not change the later performance audit scope.
 Reproduce: `node --test tests/pdf-layout.test.mjs tests/book-pagination.test.mjs`
 and `node tests/fidelity-audit.browser.mjs 14`.
 
-Remaining issues and final matrix are pending.
+#15 adds `continuesToNext` only to ordinary adjacent preserved lines, including
+punctuation/indentation-driven block splits and shared replies. The evidence is
+same source region and speech association, ordinary local baseline spacing,
+letter-bearing text, and no all-italic cue. Rendering removes that block's
+bottom margin; stanza gaps, new speakers, stage cues and headings retain their
+existing breaks. Source indentation, block identities, canonical separators,
+and offsets remain unchanged. Existing 1.8 reader line-height remains a reading
+preference, rather than duplicating the source page's exact geometry.
+
+#16 offers **Text looks wrong? → Use Original PDF** beside the layout controls.
+The explanation distinguishes embedded OCR/encoding errors from reflow and
+does not claim to detect or correct them. No OCR engine or confidence heuristic
+is added. `setMode` preserves the last Book text anchor on the source page;
+Original PDF is the supported recovery. See the README for the product policy.
+The original generated mismatch fixture maps visible glyph G to extracted C:
+the page shows “God” while PDF.js and Book view read “Cod.”
+
+Remaining issue and final matrix are pending.

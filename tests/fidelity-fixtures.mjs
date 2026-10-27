@@ -61,10 +61,10 @@ export function makeSpeechPdf() {
   ] }]);
 }
 
-export function makeOcrPdf() {
+export function makeOcrPdf({ ocrMismatch = true } = {}) {
   return makeFidelityPdf([{ items: Array.from({ length: 58 }, (_, i) => ({
     text: `God keeps the original glyphs on source line ${i + 1}.`, y: 760 - i * 11,
-  })) }], { ocrMismatch: true });
+  })) }], { ocrMismatch });
 }
 
 export const tailLengths = [48, 65, 74];

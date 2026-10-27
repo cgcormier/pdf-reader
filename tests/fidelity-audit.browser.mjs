@@ -304,6 +304,68 @@ async function speech(page) {
   report.push('PASS #15: original speech/stanza with inline emphasis and real Hamlet pages10/20/50, Original PDF comparison captures, compact source-adjacent speech density, labels/associations, source order, measured fitting, both layouts and desktop/narrow 13/19px, source endpoint roundtrips and unchanged PDF bytes.');
 }
 
+async function ocr(page) {
+  const bytes = makeOcrPdf(); const cleanBytes = makeOcrPdf({ ocrMismatch: false });
+  await page.locator('#pages-layout').click(); await page.locator('#book-view').click();
+  await importPdf(page, 'Visible God extracted Cod.pdf', bytes);
+  await writeFile(path.join(runDirectory, 'Visible God clean text reference.pdf'), cleanBytes);
+  const raster = await page.evaluate(async buffers => {
+    const { openPdf, renderPdfPage } = await import('/src/pdf-engine.js'); const rendered = [];
+    for (const bytes of buffers) {
+      const pdf = await openPdf(new Uint8Array(bytes)); const canvas = document.createElement('canvas');
+      try {
+        const text = (await (await pdf.getPage(1)).getTextContent()).items.map(item => item.str ?? '').join(' ');
+        await renderPdfPage(pdf, 1, canvas, { scale: 1 });
+        const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', pixels))).map(byte => byte.toString(16).padStart(2, '0')).join('');
+        rendered.push({ text, hash, png: canvas.toDataURL('image/png'),
+          ink: pixels.reduce((sum, channel, index) => sum + (index % 4 < 3 && channel < 128 ? 1 : 0), 0) });
+      } finally { await pdf.loadingTask.destroy(); }
+    }
+    return rendered;
+  }, [Array.from(bytes), Array.from(cleanBytes)]);
+  assert.match(raster[0].text, /Cod keeps/); assert.doesNotMatch(raster[0].text, /God keeps/);
+  assert.match(raster[1].text, /God keeps/); assert.doesNotMatch(raster[1].text, /Cod keeps/);
+  assert.ok(raster[0].ink > 1000, 'OCR fixture raster was blank');
+  assert.equal(raster[0].hash, raster[1].hash, 'ToUnicode mismatch altered the visible God glyphs');
+  for (const [index, item] of raster.entries()) await writeFile(path.join(runDirectory, `issue-16-${index ? 'clean' : 'mismatched'}-raster.png`), Buffer.from(item.png.split(',')[1], 'base64'));
+  evidence.push({ issue: 16, raster: raster.map(({ png, ...item }) => item) });
+  const canonical = await models(page, [1]); conserved(canonical);
+  for (const [viewport, readingSize] of [[{ width: 1440, height: 900 }, 13], [{ width: 390, height: 844 }, 19], [{ width: 320, height: 740 }, 23]]) {
+    await page.locator('#pages-layout').click(); await size(page, viewport, readingSize);
+    await jump(page, 1); await page.locator('#next-page').click(); await settled(page);
+    assert.ok((await savedBook(page)).bookPosition.offset > 0, 'OCR recovery did not exercise a continuation anchor');
+    for (const mode of ['pages', 'scroll']) {
+      await page.locator(`#${mode}-layout`).click(); await settled(page); await pause(850);
+      const before = await savedBook(page);
+      const visible = (await snapshot(page, 1)).flatMap(leaf => leaf.blocks).map(block => block.text).join(' ');
+      assert.match(visible, /Cod keeps/); assert.doesNotMatch(visible, /God keeps/, 'Book view guessed a correction');
+      await page.locator('#text-help-button').click();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'OCR recovery UI overflows the viewport horizontally');
+      const help = await page.locator('#modal').textContent();
+      assert.match(help, /OCR or encoding mistakes/); assert.match(help, /does not guess replacement words or run OCR/);
+      await capture(page, '16', `${mode}-${viewport.width}-${readingSize}-help`);
+      await page.locator('#use-original-button').click();
+      await page.locator('canvas:visible').first().waitFor();
+      assert.equal(await page.locator('#original-view').getAttribute('aria-pressed'), 'true');
+      assert.deepEqual((await savedBook(page)).bookPosition, before.bookPosition, 'OCR help moved Book source anchor');
+      await capture(page, '16', `${mode}-${viewport.width}-${readingSize}-original`);
+      await page.reload(); await page.locator('canvas:visible').first().waitFor();
+      assert.equal(await page.locator('#original-view').getAttribute('aria-pressed'), 'true', 'Original view did not restore');
+      assert.deepEqual((await savedBook(page)).bookPosition, before.bookPosition, 'Original reload moved Book source anchor');
+      await page.locator('#book-view').click(); await settled(page); await pause(850);
+      const after = await savedBook(page);
+      assert.deepEqual(after.bookPosition.source, before.bookPosition.source, 'return from Original moved source identity');
+      assert.equal(after.bookPosition.offset, before.bookPosition.offset, 'return from Original moved source offset');
+      assert.deepEqual(Buffer.from(after.bytes), bytes, 'OCR recovery changed original PDF bytes');
+      checkRendered(await snapshot(page, 1), canonical, { fitted: mode === 'pages' });
+      await capture(page, '16', `${mode}-${viewport.width}-${readingSize}-book-restored`);
+      evidence.push({ issue: 16, viewport, readingSize, mode, before: before.bookPosition, after: after.bookPosition });
+    }
+  }
+  report.push('PASS #16: real ToUnicode mismatch extracts Cod while raster-identical clean reference visibly contains God; Book keeps source text, help explains OCR/encoding limitations, Original and Book recovery in both layouts at desktop/narrow 13/19px, view reloads and exact source anchors/offsets/PDF bytes retained.');
+}
+
 try {
   await server.listen(); const address = server.httpServer.address();
   assert.ok(typeof address === 'object' && address.port !== 4173, 'must use isolated origin');
@@ -317,7 +379,7 @@ try {
     await page.evaluate(() => localStorage.setItem('folio:active-book', JSON.stringify('demo')));
     await page.goto(`http://127.0.0.1:${address.port}/`); await page.locator('#file-input').waitFor({ state: 'attached' });
     try {
-      const check = { 14: emphasis, 15: speech }[issue]; assert.ok(check, `Issue ${issue} harness is being completed`); await check(page);
+      const check = { 14: emphasis, 15: speech, 16: ocr }[issue]; assert.ok(check, `Issue ${issue} harness is being completed`); await check(page);
     } catch (error) { await capture(page, issue, 'failure'); throw error; }
     finally { await page.close(); }
   }

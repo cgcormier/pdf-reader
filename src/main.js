@@ -392,6 +392,7 @@ function updateContents() {
   $('book-author').textContent = book.author || `${pageCount()} pages · Your personal edition`;
   $('book-type').textContent = book.id === 'demo' ? 'A FOLIO ORIGINAL' : 'FROM YOUR SHELF';
   $('original-view').disabled = !pdf;
+  $('text-help-button').hidden = !pdf;
   $('book-view').disabled = Boolean(hasNoReadableText());
   $('book-view').title = hasNoReadableText() ? 'This PDF has no readable text layer. Use Original PDF.' : '';
   $('chapter-note').textContent = structureStatus();
@@ -982,6 +983,21 @@ function setLayout(value) {
 }
 $('book-view').addEventListener('click', () => setMode('book'));
 $('original-view').addEventListener('click', () => { if (pdf) setMode('original'); });
+$('text-help-button').addEventListener('click', () => {
+  if (!pdf) return;
+  const content = el('div');
+  content.append(el('p', 'modal-copy', 'Book view uses the text stored inside the PDF. That text can contain OCR or encoding mistakes even when the visible page looks correct.'),
+    el('p', 'modal-copy', 'Compare this source page in Original PDF, or keep reading there. Folio does not guess replacement words or run OCR. The original PDF stays unchanged.'),
+    el('p', 'inline-note', 'Use Book view to return to your text position on this source page. Both views support Scroll.'));
+  const original = button('Use Original PDF', 'secondary-button', () => {
+    $('modal').close();
+    // Switching views preserves the last Book anchor; a page jump would erase it.
+    setMode('original');
+  });
+  original.id = 'use-original-button';
+  content.append(actions(original));
+  showModal('When the text looks wrong', content);
+});
 ['pages', 'scroll'].forEach(value => $(`${value}-layout`).addEventListener('click', () => setLayout(value)));
 smallScreen.addEventListener('change', () => { flushScrollSave(); render(); });
 window.addEventListener('resize', () => {
