@@ -48,7 +48,9 @@ export function makeSpeechPdf() {
     { text: 'ACT I', x: 260, y: 760, size: 18 },
     { text: 'Enter two travellers.', x: 150, y: 725, italic: true },
     { text: 'TRAVELLER', x: 40, y: 690 },
-    ...Array.from({ length: 12 }, (_, i) => ({ text: `We carry quiet songs along the road ${i + 1}.`, x: 110, y: 690 - i * 13 })),
+    ...Array.from({ length: 12 }, (_, i) => i ? [{ text: `We carry quiet songs along the road ${i + 1}.`, x: 110, y: 690 - i * 13 }]
+      : [{ text: 'We carry ', x: 110, y: 690 }, { text: 'quiet ', x: 164, y: 690, bold: true },
+        { text: 'songs ', x: 200, y: 690, italic: true }, { text: 'along the road 1.', x: 236, y: 690 }]).flat(),
     { text: 'MESSENGER', x: 40, y: 510 },
     ...Array.from({ length: 10 }, (_, i) => ({ text: `The open gate invites the morning light ${i + 1}.`, x: 110, y: 510 - i * 13 })),
     { text: '[They leave together.]', x: 150, y: 350, italic: true },

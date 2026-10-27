@@ -124,6 +124,7 @@ export function renderLayout(host, layout, { start = 0, end = layout.projection.
     const preserve = !['paragraph', 'list'].includes(block.role);
     const node = doc.createElement(block.role === 'heading' ? 'h3' : preserve ? 'div' : 'p');
     node.className = `layout-block layout-${block.role}`;
+    if (block.continuesToNext) node.className += ' layout-continues';
     node.dataset.blockId = block.id; node.dataset.layoutStart = Math.max(start, block.start);
     node.dataset.layoutEnd = Math.min(end, block.end);
     if (block.association) {

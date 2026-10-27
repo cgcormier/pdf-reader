@@ -281,7 +281,41 @@ test('neutral verse keeps source lines and stanza gaps without freezing prose', 
     item('Another stanza begins', 40, 630), item('A second line returns', 60, 615), item('The final line remains', 40, 600)].map(run => ({ ...run, hasEOL: true })));
   assert.ok(result.blocks.every(b => b.role === 'line-group'));
   assert.match(text(result), /Across the quiet road\n\nWe carry borrowed light/);
+  assert.deepEqual(result.blocks.map(block => !!block.continuesToNext), [true, true, false, true, true, false]);
   assert.ok(result.blocks.some(b => b.indent > 0)); valid(result);
+});
+
+test('preserved dramatic lines keep ordinary spacing across punctuation and indents', () => {
+  const result = layout([item('ACT I', 100, 740, 18), item('GUIDE', 40, 700),
+    item('We wait beside the gate.', 60, 680), item('And watch.', 75, 660),
+    item('A separate stanza begins.', 60, 620), item('SCOUT', 40, 580),
+    item('We hear you.', 160, 580), item('And answer.', 60, 560), item('GUIDE', 40, 520)]);
+  const blockFor = value => result.blocks.find(block => block.lines.some(line => line.text === value));
+  assert.equal(blockFor('GUIDE').continuesToNext, true);
+  assert.equal(blockFor('We wait beside the gate.').continuesToNext, true);
+  assert.equal(blockFor('And watch.').continuesToNext, undefined);
+  assert.equal(blockFor('A separate stanza begins.').continuesToNext, undefined);
+  assert.equal(blockFor('SCOUT').continuesToNext, true);
+  assert.equal(blockFor('We hear you.').continuesToNext, true);
+  assert.equal(blockFor('And answer.').continuesToNext, undefined);
+  assert.equal(text(result), 'ACT I\n\nGUIDE\n\nWe wait beside the gate.\n\nAnd watch.\n\nA separate stanza begins.\n\nSCOUT\n\nWe hear you.\n\nAnd answer.\n\nGUIDE');
+  valid(result);
+});
+
+test('stage cues, marginal numbers and prose retain their existing block spacing', () => {
+  const items = [item('ACT I', 250, 740, 18), item('GUIDE', 40, 700), item('We wait.', 60, 680),
+    item('Enter a messenger.', 205, 660, 10, 120, { fontName: 'italic' }),
+    item('The messenger pauses.', 60, 640), item('Ghost exits.', 180, 620, 10, 100, { fontName: 'italic' }),
+    item('We hear a sound.', 60, 600), item('25', 400, 580), item('And wait again.', 60, 560), item('SCOUT', 40, 540), item('GUIDE', 40, 520)];
+  const result = interpretPage({ items, styles: { italic: { italic: true } } });
+  const blockFor = value => result.blocks.find(block => block.lines.some(line => line.text === value));
+  for (const value of ['We wait.', 'Enter a messenger.', 'The messenger pauses.', 'Ghost exits.', 'We hear a sound.', '25', 'And wait again.']) {
+    assert.equal(blockFor(value).continuesToNext, undefined, value);
+  }
+  const prose = layout([item('Ordinary prose starts here and continues over the source measure.', 40, 700, 10, 500),
+    item('The next paragraph remains prose.', 40, 660, 10, 400)]);
+  assert.ok(prose.blocks.every(block => block.role === 'paragraph' && block.continuesToNext === undefined));
+  valid(result); valid(prose);
 });
 
 test('a first-line prose indent returns to the region body margin', () => {

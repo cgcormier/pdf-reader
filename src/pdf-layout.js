@@ -331,6 +331,23 @@ function makeBlocks(lines, regions, size, tags, pageHeight) {
           : direction ? 'Stage cue with placement/style and dramatic context' : role === 'line-group' ? 'Preserved source lines; verse/prose uncertain' : 'Local spacing and indentation'],
       align: centered && (heading || direction) ? 'center' : 'start', indent, lines: [line], speaker: label?.[1] ?? null });
   }
+  const regionSpacing = new Map(regions.map(region => {
+    const local = lines.filter(line => line.regionId === region.id);
+    const gaps = local.slice(1).map((line, index) => line.baseline - local[index].baseline)
+      .filter(gap => gap > size * .6 && gap < size * 2.5);
+    return [region.id, gaps.length ? median(gaps) : spacing];
+  }));
+  const ordinaryLine = line => /\p{L}/u.test(line.text)
+    && !line.runs.filter(run => clean(run.text)).every(run => run.style.italic);
+  for (let index = 0; index < blocks.length - 1; index++) {
+    const block = blocks[index]; const next = blocks[index + 1];
+    if (!['speech', 'line-group'].includes(block.role) || next.role !== 'line-group'
+      || block.regionId !== next.regionId || block.association !== next.association) continue;
+    const last = block.lines.at(-1); const first = next.lines[0]; const gap = first.baseline - last.baseline;
+    // Punctuation and indents may split preserved lines into blocks. Keep their
+    // source adjacency without changing canonical separators or saved offsets.
+    if (ordinaryLine(last) && ordinaryLine(first) && gap >= -size * .28 && gap <= regionSpacing.get(block.regionId) * 1.45) block.continuesToNext = true;
+  }
   return blocks;
 }
 

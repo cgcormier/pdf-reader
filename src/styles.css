@@ -206,6 +206,7 @@ body:not(.scroll-mode) .page-prose .scanned-message { min-height: 0; padding-top
 .page-prose .layout-heading { margin: .5em 0 .8em; font: 1.35em/1.3 var(--serif); break-after: avoid; }
 .layout-line { display: block; padding-inline-start: calc(clamp(0em, var(--line-indent, 0em), 20%) + 1em); text-indent: -1em; white-space: pre-wrap; }
 .layout-line-group, .layout-speech, .layout-unknown, .layout-stage-direction { margin: 0 0 .65em; }
+.page-prose .layout-block.layout-continues { margin-bottom: 0; }
 .layout-stage-direction { font-style: italic; }
 .layout-speaker { font-size: .78em; letter-spacing: .035em; }
 .layout-emphasis-bold { font-weight: 700; }

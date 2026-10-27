@@ -222,3 +222,18 @@ test('speaker labels retain nested source emphasis and continuations omit repeat
   const unstyled = { ...layout, projection: { text } };
   assert.equal(renderTextLayout(unstyled).textContent, text);
 });
+
+test('only a confirmed source continuation suppresses the rendered block gap', () => {
+  const text = 'first\n\nnext\n\nstanza';
+  const layout = { bodySize: 10, regions: [], projection: { text }, blocks: [
+    { id: 'first', role: 'line-group', start: 0, end: 5, continuesToNext: true, lines: [{ start: 0, end: 5, x: 0 }] },
+    { id: 'next', role: 'line-group', start: 7, end: 11, lines: [{ start: 7, end: 11, x: 0 }] },
+    { id: 'stanza', role: 'line-group', start: 13, end: 19, lines: [{ start: 13, end: 19, x: 0 }] },
+  ] };
+  const whole = renderTextLayout(layout);
+  assert.match(whole.children[0].className, /\blayout-continues\b/);
+  assert.ok(whole.children.slice(1).every(node => !node.className.includes('layout-continues')));
+  const fragment = renderTextLayout(layout, { start: 2, end: 11 });
+  assert.match(fragment.children[0].className, /\blayout-continues\b/);
+  assert.equal(fragment.textContent, 'rstnext');
+});
