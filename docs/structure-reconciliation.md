@@ -1,5 +1,10 @@
 # October 26 structure audit, batch two
 
+The subsequent local #14-#17 fidelity and pagination work is recorded in
+[fidelity-pagination.md](fidelity-pagination.md), on a branch retaining this
+batch and the opening-recovery batch. The scope and results below describe
+batch two at its recorded verification point.
+
 Scope: [tracker #3, item 2](https://github.com/cgcormier/pdf-reader/issues/3),
 issues #6, #9, #10, #11, #12 and #13. Local branch
 `fix/reader-structure-reconciliation` starts at `fix/reader-opening-recovery`

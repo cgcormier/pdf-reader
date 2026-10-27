@@ -6,6 +6,19 @@ Scope: tracker #3 item 3, issues #14–#17. Local branch
 `fix/reader-opening-recovery`, retaining both prior audit batches.
 No publication, issue closure, installation, or live-shelf changes are authorized.
 
+## Local issue outcomes
+
+| Issue | Completed outcome | Local commit |
+| --- | --- | --- |
+| #14 | Reliable bold/italic projection, sliced semantic rendering, conservative metadata and stable source anchors | `d5aaf00` |
+| #15 | Compact ordinary preserved lines with stanza/speech/cue breaks and indentation retained | `25bb40f` |
+| #16 | Explained Original PDF recovery for unreliable embedded text, with exact Book-anchor restoration | `d912862` |
+| #17 | Measured page-local final-pair balancing with heading/source-line/speaker protection | `4abd8c6` |
+
+All four commits remain local on `fix/reader-fidelity-pagination`; GitHub issues
+and tracker checkboxes were not modified. The prior batch handoff remains
+[structure-reconciliation.md](structure-reconciliation.md).
+
 ## Ownership and shared contracts
 
 | Owner | Files |
