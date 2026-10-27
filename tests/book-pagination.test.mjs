@@ -237,3 +237,105 @@ test('only a confirmed source continuation suppresses the rendered block gap', (
   assert.match(fragment.children[0].className, /\blayout-continues\b/);
   assert.equal(fragment.textContent, 'rstnext');
 });
+
+function paragraphLayout(text) {
+  return { projection: { text }, regions: [], blocks: [{ id: 'body', role: 'paragraph', start: 0, end: text.length, lines: [] }] };
+}
+
+for (const tail of [48, 65, 74]) test(`a ${tail}-character terminal leaf balances within its source page`, () => {
+  const text = 'x '.repeat(500) + 'z'.repeat(tail);
+  const fits = slice => slice.length <= 1000;
+  assert.equal(paginateText(text, fits).at(-1).text.length, tail);
+  const fragments = paginateLayout(paragraphLayout(text), fits);
+  assert.equal(fragments.length, 2);
+  assert.equal(fragments[0].start, 0);
+  assert.equal(fragments[0].end, fragments[1].start);
+  assert.equal(fragments[1].end, text.length);
+  assert.equal(fragments.map(fragment => fragment.text).join(''), text);
+  assert.ok(fragments.every(fragment => fragment.kind === 'layout' && fits(fragment.text)));
+  assert.ok(Math.min(...fragments.map(fragment => fragment.text.length)) / text.length > .49);
+});
+
+test('tail balancing leaves meaningful heading boundaries and already substantial tails alone', () => {
+  const text = 'x '.repeat(500) + '\n\nSCENE\n\nA short ending.';
+  const layout = paragraphLayout(text);
+  layout.blocks = [{ id: 'body', role: 'paragraph', start: 0, end: 1000, lines: [] },
+    { id: 'heading', role: 'heading', start: 1002, end: 1007, lines: [] },
+    { id: 'end', role: 'paragraph', start: 1009, end: text.length, lines: [] }];
+  const fits = slice => slice.length <= 1000;
+  assert.deepEqual(paginateLayout(layout, fits).map(({ start, end, text }) => ({ start, end, text })), paginateText(text, fits));
+  const substantial = 'x '.repeat(700);
+  assert.deepEqual(paginateLayout(paragraphLayout(substantial), fits).map(({ start, end, text }) => ({ start, end, text })), paginateText(substantial, fits));
+});
+
+test('a quarter-length tail stays unchanged and earlier leaves keep their boundaries', () => {
+  const text = 'x '.repeat(600);
+  const fits = slice => slice.length <= 900;
+  assert.deepEqual(paginateLayout(paragraphLayout(text), fits).map(fragment => fragment.text.length), [900, 300]);
+  const longer = 'x '.repeat(1000) + 'tail';
+  const fragments = paginateLayout(paragraphLayout(longer), slice => slice.length <= 1000);
+  assert.deepEqual(fragments.map(fragment => fragment.text.length), [1000, 502, 502]);
+  assert.equal(fragments.map(fragment => fragment.text).join(''), longer);
+});
+
+test('tail balancing uses source-line boundaries and keeps labels with the following speech', () => {
+  const text = 'x '.repeat(525);
+  const layout = paragraphLayout(text);
+  layout.blocks = [{ id: 'verse', role: 'line-group', start: 0, end: text.length,
+    lines: Array.from({ length: 11 }, (_, index) => ({ start: index * 100, end: Math.min(text.length, index * 100 + 99) })) }];
+  const balanced = paginateLayout(layout, slice => slice.length <= 1000);
+  assert.equal(balanced[0].end, 500);
+  const speechText = text.slice(0, 500) + 'VOICE\n\n' + text.slice(507);
+  const speech = paragraphLayout(speechText);
+  speech.blocks = [{ id: 'opening', role: 'paragraph', start: 0, end: 498, lines: [] },
+    { id: 'label', role: 'speech', start: 500, end: 505, speaker: 'VOICE', association: 's1', lines: [{ start: 500, end: 505 }] },
+    { id: 'reply', role: 'line-group', start: 507, end: speechText.length, association: 's1',
+      lines: [{ start: 507, end: 599 }, { start: 600, end: 799 }, { start: 800, end: 999 }, { start: 1000, end: speechText.length }] }];
+  const fragments = paginateLayout(speech, slice => slice.length <= 1000);
+  assert.equal(fragments[0].end, 500, 'the closer boundary after VOICE would orphan its label');
+  assert.ok(fragments[1].text.startsWith('VOICE\n\n'));
+  assert.equal(fragments.map(fragment => fragment.text).join(''), speechText);
+});
+
+test('tail balancing keeps the original split when no safe candidate fits both leaves', () => {
+  const text = 'x '.repeat(500) + 'z'.repeat(74);
+  const fits = (slice, { start }) => slice.length <= (start === 0 ? 1000 : 74);
+  assert.deepEqual(paginateLayout(paragraphLayout(text), fits).map(({ start, end, text }) => ({ start, end, text })), paginateText(text, fits));
+  const word = 'x'.repeat(1050);
+  assert.deepEqual(paginateLayout(paragraphLayout(word), slice => slice.length <= 1000).map(fragment => fragment.text.length), [1000, 50]);
+});
+
+test('balanced fragments retain clipped emphasis and pager forward/backward symmetry', async () => {
+  const text = 'x '.repeat(525);
+  const layout = paragraphLayout(text);
+  layout.projection.emphasis = [{ start: 400, end: 800, bold: true, italic: true }];
+  const fragments = paginateLayout(layout, slice => slice.length <= 1000);
+  assert.ok(fragments[0].end > 500 && fragments[0].end < 550);
+  assert.equal(fragments.map(fragment => renderTextLayout(layout, fragment).textContent).join(''), text);
+  const styledText = fragments.flatMap(fragment => renderTextLayout(layout, fragment).children[0].children)
+    .filter(node => node.tag === 'strong').map(node => node.textContent).join('');
+  assert.equal(styledText, text.slice(400, 800));
+  const pager = createBookPager({ count: 2, loadFragments: async page => page === 1 ? fragments : [{ start: 0, end: 0, text: '', kind: 'scan' }] });
+  const first = await pager.spread({ page: 1, offset: 600 }, 1);
+  assert.equal(first.anchor.offset, fragments[1].start);
+  const previous = await pager.previous(first.anchor);
+  assert.deepEqual(previous, { page: 1, offset: 0 });
+  assert.deepEqual((await pager.spread(previous, 1)).next, first.anchor);
+  const scan = await pager.spread(first.next, 1);
+  assert.equal(scan.leaves[0].kind, 'scan');
+  assert.deepEqual(await pager.previous(scan.anchor), first.anchor);
+});
+
+test('tail balancing preserves empty and oversized leaves and aborts extra fit probes', () => {
+  assert.deepEqual(paginateLayout(paragraphLayout(''), () => true).map(fragment => fragment.text), ['']);
+  assert.equal(paginateLayout(paragraphLayout('\u{1f600}'), () => false)[0].kind, 'overflow');
+  const text = 'x '.repeat(525);
+  let greedyCalls = 0;
+  paginateText(text, slice => { greedyCalls++; return slice.length <= 1000; });
+  const controller = new AbortController(); let calls = 0;
+  assert.throws(() => paginateLayout(paragraphLayout(text), slice => {
+    if (++calls > greedyCalls) controller.abort();
+    return slice.length <= 1000;
+  }, { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(calls, greedyCalls + 1);
+});

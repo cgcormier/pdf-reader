@@ -43,8 +43,8 @@ export function makeEmphasisPdf() {
   }).flat() })));
 }
 
-export function makeSpeechPdf() {
-  return makeFidelityPdf([{ items: [
+function speechPage() {
+  return { items: [
     { text: 'ACT I', x: 260, y: 760, size: 18 },
     { text: 'Enter two travellers.', x: 150, y: 725, italic: true },
     { text: 'TRAVELLER', x: 40, y: 690 },
@@ -58,7 +58,10 @@ export function makeSpeechPdf() {
     { text: 'The willow holds its shadow in the deep.', x: 80, y: 297 },
     { text: 'A lantern turns beside the silent door.', x: 80, y: 265 },
     { text: 'And waits for footsteps on the wooden floor.', x: 80, y: 252 },
-  ] }]);
+  ] };
+}
+export function makeSpeechPdf() {
+  return makeFidelityPdf([speechPage()]);
 }
 
 export function makeOcrPdf({ ocrMismatch = true } = {}) {
@@ -68,6 +71,16 @@ export function makeOcrPdf({ ocrMismatch = true } = {}) {
 }
 
 export const tailLengths = [48, 65, 74];
+export function makeMeasuredTailPdf(lengths = [3000, 3000, 3000]) {
+  return makeFidelityPdf(lengths.map((length, page) => {
+    let text = 'quiet '.repeat(Math.ceil(length / 6)).slice(0, length - 1) + 'z'; const lines = [];
+    while (text.length > 72) {
+      const end = text.lastIndexOf(' ', 72); lines.push(text.slice(0, end)); text = text.slice(end + 1);
+    }
+    lines.push(text);
+    return { items: lines.map((text, index) => ({ text, x: 40, y: 760 - index * 13, bold: page === 2, italic: page === 2 })) };
+  }));
+}
 export function makeTailPdf() {
   return makeFidelityPdf([
     ...tailLengths.map((length, page) => ({ items: [
@@ -76,5 +89,6 @@ export function makeTailPdf() {
     ] })),
     { items: [] }, { image: true },
     { items: [{ text: 'The final source page remains reachable.', y: 700 }] },
+    speechPage(),
   ]);
 }

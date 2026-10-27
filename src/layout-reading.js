@@ -73,6 +73,45 @@ export function readingPosition(layout, page, offset, previous = {}) {
     ...(previous.legacyOffset != null ? { legacyOffset: previous.legacyOffset } : {}) };
 }
 
+function balanceLayoutTail(layout, fragments, fits, signal) {
+  if (fragments.length < 2) return;
+  const first = fragments.at(-2); const last = fragments.at(-1);
+  const length = last.end - first.start;
+  if ((last.end - last.start) / length >= .25) return;
+  const text = layout.projection.text;
+  const blocks = layoutSlice(layout, first.start, last.end);
+  // Rebalance only within this source page, retaining semantic line breaks and
+  // chapter/section boundaries. Sparse singleton pages keep their source identity.
+  if (blocks.some(block => block.role === 'heading' && block.start > first.start)) return;
+  const candidates = new Set();
+  for (const block of blocks) {
+    candidates.add(block.start);
+    if (['paragraph', 'list'].includes(block.role)) {
+      const start = Math.max(first.start, block.start); const end = Math.min(first.end, block.end);
+      for (const match of text.slice(start, end).matchAll(/\s+/gu)) candidates.add(start + match.index + match[0].length);
+    } else for (const line of block.lines) candidates.add(line.start);
+  }
+  const midpoint = first.start + length / 2;
+  const originalImbalance = Math.abs(first.end - midpoint);
+  const boundaries = [...candidates].filter(end => end > first.start && end < first.end
+    && Math.abs(end - midpoint) < originalImbalance).sort((a, b) => Math.abs(a - midpoint) - Math.abs(b - midpoint) || a - b);
+  const measure = fragment => {
+    if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    const result = fits(fragment.text, fragment);
+    if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    return result;
+  };
+  for (const end of boundaries) {
+    const speaker = blocks.findLast(block => block.speaker && block.start >= first.start && block.start < end);
+    if (speaker && text.slice(speaker.start, end).trim().length <= speaker.speaker.length) continue;
+    const previous = { ...first, end, text: text.slice(first.start, end) };
+    const final = { ...last, start: end, text: text.slice(end, last.end) };
+    if (!measure(previous) || !measure(final)) continue;
+    fragments.splice(fragments.length - 2, 2, previous, final);
+    return;
+  }
+}
+
 export function paginateLayout(layout, fits, { signal } = {}) {
   const fragments = paginateText(layout.projection.text, fits, { signal });
   // Keep a label with the first word when it would otherwise end a leaf.
@@ -86,6 +125,7 @@ export function paginateLayout(layout, fits, { signal } = {}) {
     const tail = paginateText(layout.projection.text.slice(next.start), (slice, range) => fits(slice, { start: range.start + next.start, end: range.end + next.start }), { signal });
     fragments.splice(i + 1, fragments.length, ...tail.map(f => ({ ...f, start: f.start + next.start, end: f.end + next.start })));
   }
+  balanceLayoutTail(layout, fragments, fits, signal);
   return fragments.map(fragment => ({ ...fragment, layout,
     kind: !fits(fragment.text, fragment) ? 'overflow' : 'layout' }));
 }

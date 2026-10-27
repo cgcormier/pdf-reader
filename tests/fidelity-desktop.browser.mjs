@@ -179,6 +179,18 @@ try {
     assert.match(await page.locator('#modal-body').textContent(), /THUS|ZARATH|\?/);
     await page.locator('#modal-close').click();
     await page.locator('#pages-layout').click(); await jump(number); await shot(`nietzsche-${number}-pages`);
+    if (number === 3) {
+      const ranges = () => page.locator('#book-spread > .paper-page[data-source-page="3"]').evaluateAll(leaves => leaves.map(leaf => ({
+        start: Number(leaf.dataset.textOffset), end: Number(leaf.dataset.textEnd),
+      })));
+      const firstPair = await ranges();
+      await page.locator('#next-page').click(); await settled();
+      const final = (await ranges())[0];
+      assert.ok(final && final.end - final.start > 65, 'production Nietzsche continuation remained a tiny tail');
+      assert.equal(firstPair.at(-1).end, final.start, 'production continuation gap or overlap');
+      await shot('nietzsche-3-balanced-tail');
+      results.push({ nietzschePage3: [...firstPair, final] });
+    }
   }
   const beforeRestart = await stored();
   await stop(); await launch();
