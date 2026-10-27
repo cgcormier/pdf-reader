@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBookPager, fragmentAt, paginateText } from '../src/book-pagination.js';
+import { paginateLayout, renderLayout } from '../src/layout-reading.js';
 
 test('pagination preserves every character and prefers whitespace boundaries', () => {
   const text = 'First paragraph.\n\nSecond paragraph, with spaces.  End.';
@@ -159,4 +160,65 @@ test('capacity hints cannot change breaks when leaf capacity varies or glyphs do
       assert.equal(fragment.text, expected);
     }
   }
+});
+
+function renderTextLayout(layout, options) {
+  const doc = {
+    createTextNode: text => ({ textContent: text }),
+    createElement: tag => ({ tag, ownerDocument: doc, children: [], dataset: {},
+      style: { setProperty() {} }, setAttribute() {},
+      append(...nodes) { this.children.push(...nodes); },
+      get textContent() { return this.children.map(node => node.textContent).join(''); },
+    }),
+  };
+  const host = doc.createElement('div');
+  renderLayout(host, layout, options);
+  return host;
+}
+
+test('mixed source emphasis survives canonical leaf cuts without changing text', () => {
+  const text = 'plain italic bold both end';
+  const layout = { projection: { text, emphasis: [
+    { start: 6, end: 12, bold: false, italic: true },
+    { start: 13, end: 17, bold: true, italic: false },
+    { start: 18, end: 22, bold: true, italic: true },
+  ] }, regions: [], blocks: [{ id: 'body', role: 'paragraph', start: 0, end: text.length, lines: [] }] };
+  const whole = renderTextLayout(layout).children[0];
+  assert.equal(whole.textContent, text);
+  assert.equal(whole.children.find(node => node.tag === 'em').textContent, 'italic');
+  assert.deepEqual(whole.children.filter(node => node.tag === 'strong').map(node => node.textContent), ['bold', 'both']);
+  assert.equal(whole.children.find(node => node.textContent === 'both').children[0].tag, 'em');
+  const clipped = renderTextLayout(layout, { start: 8, end: 20 }).children[0];
+  assert.equal(clipped.textContent, text.slice(8, 20));
+  assert.equal(clipped.children[0].tag, 'em');
+  assert.equal(clipped.children[0].textContent, 'alic');
+  assert.equal(clipped.children.at(-1).children[0].textContent, 'bo');
+  const fragments = paginateLayout(layout, (slice, range) => {
+    const rendered = renderTextLayout(layout, range);
+    assert.equal(rendered.textContent, slice);
+    return rendered.textContent.length <= 10;
+  });
+  assert.equal(fragments.map(fragment => renderTextLayout(layout, fragment).textContent).join(''), text);
+  assert.ok(fragments.every(fragment => fragment.kind === 'layout'));
+});
+
+test('speaker labels retain nested source emphasis and continuations omit repeated labels', () => {
+  const text = 'GUIDE Take care.';
+  const layout = { bodySize: 10, regions: [{ id: 'body', x: 0 }],
+    projection: { text, emphasis: [{ start: 0, end: 10, bold: false, italic: true }] },
+    blocks: [{ id: 'speech', role: 'speech', speaker: 'GUIDE', association: 's1', regionId: 'body',
+      start: 0, end: text.length, lines: [{ start: 0, end: text.length, x: 0 }] }] };
+  const line = renderTextLayout(layout).children[0].children[0];
+  assert.equal(line.textContent, text);
+  assert.equal(line.children[0].className, 'layout-speaker');
+  assert.equal(line.children[0].children[0].tag, 'em');
+  assert.equal(line.children[0].textContent, 'GUIDE');
+  assert.equal(line.children[1].tag, 'em');
+  assert.equal(line.children[1].textContent, ' Take');
+  const continued = renderTextLayout(layout, { start: 7, end: text.length }).children[0].children[0];
+  assert.equal(continued.textContent, text.slice(7));
+  assert.ok(continued.children.every(node => node.className !== 'layout-speaker'));
+  assert.equal(continued.children[0].textContent, 'ake');
+  const unstyled = { ...layout, projection: { text } };
+  assert.equal(renderTextLayout(unstyled).textContent, text);
 });

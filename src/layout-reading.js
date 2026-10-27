@@ -90,6 +90,32 @@ export function paginateLayout(layout, fits, { signal } = {}) {
     kind: !fits(fragment.text, fragment) ? 'overflow' : 'layout' }));
 }
 
+// Styling addresses the canonical string, so a leaf cut through an emphasized
+// source run retains both its text and its emphasis without shifting anchors.
+function appendEmphasis(host, projection, start, end) {
+  const doc = host.ownerDocument;
+  const ranges = projection.emphasis ?? [];
+  let low = 0; let high = ranges.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (ranges[middle].end <= start) low = middle + 1;
+    else high = middle;
+  }
+  let offset = start;
+  for (let index = low; index < ranges.length && ranges[index].start < end; index++) {
+    const range = ranges[index];
+    const from = Math.max(start, range.start); const to = Math.min(end, range.end);
+    if (offset < from) host.append(doc.createTextNode(projection.text.slice(offset, from)));
+    let node = doc.createTextNode(projection.text.slice(from, to));
+    for (const [enabled, tag, className] of [[range.italic, 'em', 'layout-emphasis-italic'], [range.bold, 'strong', 'layout-emphasis-bold']]) {
+      if (!enabled) continue;
+      const wrapper = doc.createElement(tag); wrapper.className = className; wrapper.append(node); node = wrapper;
+    }
+    host.append(node); offset = to;
+  }
+  if (offset < end) host.append(doc.createTextNode(projection.text.slice(offset, end)));
+}
+
 /** Render only text nodes, in canonical reading order. Shared by both views. */
 export function renderLayout(host, layout, { start = 0, end = layout.projection.text.length, decorate = false } = {}) {
   const doc = host.ownerDocument;
@@ -109,20 +135,22 @@ export function renderLayout(host, layout, { start = 0, end = layout.projection.
     node.style.setProperty('--source-indent', `${Math.min(5, block.indent)}em`);
     node.style.setProperty('--first-indent', `${block.continued ? 0 : Math.min(4, block.firstIndent ?? 0)}em`);
     if (decorate && block.role === 'paragraph' && !block.continued && block.start === 0) node.classList.add('drop-cap');
-    if (!preserve) node.textContent = layout.projection.text.slice(Math.max(start, block.start), Math.min(end, block.end));
+    if (!preserve) appendEmphasis(node, layout.projection, Math.max(start, block.start), Math.min(end, block.end));
     else for (const [index, line] of block.lines.entries()) {
       if (index) node.append(doc.createTextNode('\n'));
       const span = doc.createElement('span'); span.className = 'layout-line';
       span.dataset.layoutStart = line.fragmentStart; span.dataset.layoutEnd = line.fragmentEnd;
       const region = regions.get(block.regionId);
       span.style.setProperty('--line-indent', `${Math.max(0, Math.min(6, (line.x - (region?.x ?? line.x)) / layout.bodySize))}em`);
-      span.textContent = line.text;
       // Labels may share a source TextItem with speech. This is a conservative
       // string subdivision, not a claim of per-glyph source geometry.
       if (block.speaker && !block.continued && index === 0 && line.text.startsWith(block.speaker)) {
-        const label = doc.createElement('strong'); label.className = 'layout-speaker'; label.textContent = block.speaker;
-        span.replaceChildren(label, doc.createTextNode(line.text.slice(block.speaker.length)));
-      }
+        const label = doc.createElement('strong'); label.className = 'layout-speaker';
+        const labelEnd = line.fragmentStart + block.speaker.length;
+        appendEmphasis(label, layout.projection, line.fragmentStart, labelEnd);
+        span.append(label);
+        appendEmphasis(span, layout.projection, labelEnd, line.fragmentEnd);
+      } else appendEmphasis(span, layout.projection, line.fragmentStart, line.fragmentEnd);
       node.append(span);
     }
     host.append(node);

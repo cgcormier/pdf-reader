@@ -13,6 +13,103 @@ const layout = items => interpretPage({ items });
 const text = l => l.projection.text;
 const valid = l => assert.deepEqual(conservation(l), { valid: true, errors: [] });
 
+test('emphasis preserves canonical UTF-16 text, source mapping and clipped slices', () => {
+  const items = [item('Plain ', 40, 700, 10, 30, { fontName: 'plain' }),
+    item('bold', 70, 700, 10, 20, { fontName: 'bold' }),
+    item(' italic\t😀 ', 90, 700, 10, 45, { fontName: 'italic' }),
+    item('both', 135, 700, 10, 20, { fontName: 'both' })];
+  const plain = interpretPage({ items });
+  const result = interpretPage({ items, styles: { bold: { bold: true }, italic: { italic: true }, both: { bold: true, italic: true } } });
+  assert.equal(text(result), text(plain));
+  assert.deepEqual(result.projection.segments, plain.projection.segments);
+  assert.deepEqual(result.projection.omitted, plain.projection.omitted);
+  assert.deepEqual(result.projection.emphasis.map(range => ({ ...range, text: text(result).slice(range.start, range.end) })), [
+    { start: 6, end: 10, bold: true, italic: false, text: 'bold' },
+    { start: 11, end: 20, bold: false, italic: true, text: 'italic 😀' },
+    { start: 21, end: 25, bold: true, italic: true, text: 'both' },
+  ]);
+  const slices = paginateLayout(result, slice => slice.length <= 14);
+  assert.equal(slices.map(slice => slice.text).join(''), text(plain));
+  for (const offset of [6, 9, 11, 18, 19, 21, 24]) {
+    const source = sourceAt(result.projection, offset);
+    assert.equal(offsetForSource(result.projection, source), offset);
+    const position = { page: 1, offset, source, layoutVersion: result.version };
+    assert.deepEqual(resolveReadingPosition({ layout: result }, position), resolveReadingPosition({ layout: plain }, position));
+  }
+  valid(result);
+});
+
+test('emphasis uses explicit metadata and source face suffixes without interpreting font IDs', () => {
+  const styles = {
+    a: { sourceFontName: 'ABCDEF+TimesNewRomanPS-BoldItalicMT' },
+    b: { sourceFontName: 'ArialBoldMT' },
+    c: { fontWeight: '700', fontStyle: 'oblique 12deg' },
+    d: { sourceFontName: 'Bolden' }, e: { sourceFontName: 'Italicus' }, f: { sourceFontName: 'Blackburn' },
+    g_d0_BoldItalic: { fontFamily: 'serif' },
+    normal: { sourceFontName: 'Helvetica-BoldOblique', bold: false, italic: false },
+  };
+  const result = interpretPage({ items: Object.keys(styles).map((fontName, index) => item('word', 40, 700 - index * 20, 10, 20, { fontName })), styles });
+  assert.deepEqual(result.runs.map(run => [run.style.bold, run.style.italic]), [
+    [true, true], [true, false], [true, true], [false, false], [false, false], [false, false], [false, false], [false, false],
+  ]);
+  assert.equal(layout([item('Missing metadata.', 40, 700)]).projection.emphasis, undefined);
+  valid(result);
+});
+
+test('PDF.js adapter loads actual font metadata and tolerates unavailable font records', async () => {
+  let operators = 0;
+  const pdf = { numPages: 1, getPage: async () => ({ view: [0, 0, 600, 800],
+    getTextContent: async () => ({ items: [item('Styled', 40, 700, 10, 30, { fontName: 'g_d0_f1' }), item(' missing', 70, 700, 10, 40, { fontName: 'g_d0_f2' })],
+      styles: { g_d0_f1: { fontFamily: 'serif' }, g_d0_f2: { fontFamily: 'serif' } } }),
+    getOperatorList: async () => { operators++; },
+    commonObjs: { get: id => { if (id === 'g_d0_f2') throw new Error('unavailable'); return { name: 'ABCDEF+TimesNewRomanPS-ItalicMT' }; } },
+  }) };
+  const result = await readPageLayout(pdf, 1);
+  assert.equal(operators, 1);
+  assert.deepEqual(result.projection.emphasis, [{ start: 0, end: 6, bold: false, italic: true }]);
+  assert.equal(text(result), 'Styled missing'); valid(result);
+  clearPageLayouts(pdf);
+  const failure = { numPages: 1, getPage: async () => ({ view: [0, 0, 600, 800],
+    getTextContent: async () => ({ items: [item('Still readable.', 40, 700)] }),
+    getOperatorList: async () => { throw new Error('unsupported'); }, commonObjs: { get: () => null },
+  }) };
+  assert.equal(text(await readPageLayout(failure, 1)), 'Still readable.');
+});
+
+test('installed PDF.js resolves emphasis when public text styles contain only a generic family', async () => {
+  const task = getDocument({ data: makeLayoutPdf([{ items: [
+    { text: 'Ordinary', x: 40, y: 700 }, { text: 'italic words', x: 90, y: 700, italic: true },
+  ] }]), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    const page = await pdf.getPage(1);
+    const publicContent = await page.getTextContent({ includeMarkedContent: true });
+    assert.ok(Object.values(publicContent.styles).every(style => style.italic === undefined && style.fontStyle === undefined));
+    const plain = interpretPage(publicContent);
+    const result = await readPageLayout(pdf, 1);
+    assert.equal(text(result), text(plain));
+    assert.deepEqual(result.projection.segments, plain.projection.segments);
+    assert.deepEqual(result.projection.emphasis.map(range => ({ ...range, text: text(result).slice(range.start, range.end) })), [
+      { start: 9, end: 21, bold: false, italic: true, text: 'italic words' },
+    ]);
+    valid(result);
+  } finally { await task.destroy(); }
+});
+
+test('italic multiline stage text preserves existing canonical separators and source anchors', () => {
+  const items = [item('ACT I', 250, 740, 18), item('GUIDE', 40, 700), item('We await the company.', 60, 680),
+    item('SCOUT', 40, 660), item('They approach.', 60, 640), item('GUIDE', 40, 620),
+    item('Enter the travellers carrying their lanterns,', 40, 600, 10, 240, { fontName: 'face' }),
+    item('with the players and all their attendants', 40, 586, 10, 240, { fontName: 'face' }),
+    item('GUIDE Our company is here.', 40, 560)];
+  const plain = interpretPage({ items });
+  const styled = interpretPage({ items, styles: { face: { italic: true } } });
+  assert.equal(text(styled), text(plain));
+  assert.deepEqual(styled.projection.segments, plain.projection.segments);
+  assert.deepEqual(styled.blocks.map(block => [block.role, block.start, block.end]), plain.blocks.map(block => [block.role, block.start, block.end]));
+  assert.ok(styled.projection.emphasis.length); valid(styled);
+});
+
 test('indexed layout slices retain exact boundaries and source lines across a large page', () => {
   const blocks = Array.from({ length: 200 }, (_, index) => ({ id: `b${index}`, start: index * 10, end: index * 10 + 8,
     lines: [{ start: index * 10, end: index * 10 + 3 }, { start: index * 10 + 4, end: index * 10 + 8 }] }));

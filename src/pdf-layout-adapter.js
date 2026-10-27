@@ -25,6 +25,21 @@ export async function readPageLayout(pdf, number, { signal } = {}) {
         page.getTextContent({ includeMarkedContent: true }),
         page.getStructTree?.().catch(() => null) ?? null,
       ]);
+      // TextContent exposes fallback families, which omit emphasis even for
+      // embedded italic faces. The operator list loads the actual font records.
+      if (page.getOperatorList && page.commonObjs?.get) {
+        try {
+          await page.getOperatorList();
+          for (const [id, style] of Object.entries(content.styles ?? {})) {
+            try {
+              const font = page.commonObjs.get(id);
+              content.styles[id] = { ...style, sourceFontName: font.name ?? style.sourceFontName,
+                bold: font.black === true ? true : font.bold ?? style.bold, italic: font.italic ?? style.italic,
+                fontWeight: font.cssFontInfo?.fontWeight ?? style.fontWeight, italicAngle: font.cssFontInfo?.italicAngle ?? style.italicAngle };
+            } catch { /* A missing font record leaves text and source mapping intact. */ }
+          }
+        } catch { /* Unsupported operator lists retain the TextContent fallback. */ }
+      }
       return interpretPage(content, { pageNumber: number, view: page.view,
         viewport: page.getViewport?.({ scale: 1 }), structTree, documentId: pdf.fingerprints?.[0] ?? null, rotation: page.rotate ?? 0 });
     })();

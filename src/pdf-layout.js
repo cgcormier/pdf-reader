@@ -50,6 +50,23 @@ const speakerMatch = text => {
   return match[1].length > 1 ? match : null;
 };
 
+function emphasisStyle(style) {
+  // PDF.js text font IDs carry no style information. Only a source font's
+  // actual face name may supplement missing descriptor flags.
+  const name = String(style.sourceFontName ?? '').replace(/^[A-Z]{6}\+/, '');
+  const boldName = /(?:^|[-_,\s])(?:(?:semi|demi|extra|ultra)?bold|black|heavy)(?:italic|oblique)?(?:mt|ps)?$/i.test(name)
+    || /[a-z](?:(?:Semi|Demi|Extra|Ultra)?Bold|Black|Heavy)(?:Italic|Oblique)?(?:MT|PS)?$/.test(name);
+  const italicName = /(?:^|[-_,\s])(?:(?:semi|demi|extra|ultra)?bold)?(?:italic|oblique)(?:mt|ps)?$/i.test(name)
+    || /[a-z](?:Bold)?(?:Italic|Oblique)(?:MT|PS)?$/.test(name);
+  const weight = style.fontWeight;
+  const bold = typeof style.bold === 'boolean' ? style.bold
+    : weight != null ? /^(?:bold|bolder)$/i.test(String(weight)) || Number(weight) >= 600 : boldName;
+  const italic = typeof style.italic === 'boolean' ? style.italic
+    : style.fontStyle != null ? /^(?:italic|oblique)(?:\s|$)/i.test(String(style.fontStyle))
+      : style.italicAngle != null ? Number(style.italicAngle) !== 0 && Number.isFinite(Number(style.italicAngle)) : italicName;
+  return { ...style, bold, italic };
+}
+
 function capture(content, { pageNumber, view, viewport }) {
   const matrix = viewport?.transform?.length === 6 ? [...viewport.transform] : [1, 0, 0, -1, -view[0], view[3]];
   const marked = []; const runs = [];
@@ -64,7 +81,7 @@ function capture(content, { pageNumber, view, viewport }) {
     const [x, y] = point(matrix, t[4], t[5]);
     const vector = [matrix[0] * t[0] + matrix[2] * t[1], matrix[1] * t[0] + matrix[3] * t[1]];
     const angle = Math.atan2(vector[1], vector[0]);
-    const style = { ...(content.styles?.[item.fontName] ?? {}) };
+    const style = emphasisStyle(content.styles?.[item.fontName] ?? {});
     const width = Math.max(0, Number(item.width) || item.str.length * size * .45);
     const ascent = Number.isFinite(style.ascent) ? style.ascent : .8;
     const descent = Number.isFinite(style.descent) ? style.descent : -.2;
@@ -271,8 +288,9 @@ function makeBlocks(lines, regions, size, tags, pageHeight) {
       && previous?.role === 'heading' && before?.regionId === line.regionId
       && above >= spacing * 1.35 && above <= spacing * 3 && below >= spacing * 1.15 && below <= spacing * 3;
     const heading = explicit || (!label && !line.caps.length && line.size > size * 1.4 && text.length < 100) || isolatedTitle || smallCapsTitle;
-    const direction = drama && !heading && !label && (((centered || line.x - region.x > size * 3 && text.length < 80) && /^(?:Enter|Exit|Exeunt|Flourish|\[|\()/i.test(text))
-      || (line.runs.some(r => /italic|oblique/i.test(r.style.fontFamily + r.fontName)) && /^(?:Enter|Exit|Exeunt|\[)/i.test(text)));
+    // Emphasis alone must not split a source cue's block and shift saved offsets.
+    const direction = drama && !heading && !label && (centered || line.x - region.x > size * 3 && text.length < 80)
+      && /^(?:Enter|Exit|Exeunt|Flourish|\[|\()/i.test(text);
     const unsupported = Math.abs(line.angle) > .08 || line.runs.some(r => r.dir !== 'ltr' || r.style.vertical);
     const table = line.tableLike;
     const formula = /[=∑∫√]/u.test(text) && text.length < 100 && !/[.!?]$/.test(text);
@@ -317,9 +335,14 @@ function makeBlocks(lines, regions, size, tags, pageHeight) {
 }
 
 function project(blocks, caps) {
-  let text = ''; const segments = []; const omitted = [];
-  const append = (value, source = null, transform = null) => {
+  let text = ''; const segments = []; const omitted = []; const emphasis = [];
+  const append = (value, source = null, transform = null, style = null) => {
     if (!value) return;
+    if (style?.bold || style?.italic) {
+      const previous = emphasis.at(-1);
+      if (previous?.end === text.length && previous.bold === style.bold && previous.italic === style.italic) previous.end += value.length;
+      else emphasis.push({ start: text.length, end: text.length + value.length, bold: style.bold, italic: style.italic });
+    }
     segments.push({ start: text.length, end: text.length + value.length, source, transform }); text += value;
   };
   for (const [blockIndex, block] of blocks.entries()) {
@@ -337,7 +360,7 @@ function project(blocks, caps) {
         const expression = /\s+|\S+/gu;
         for (const match of run.text.slice(leading, end).matchAll(expression)) {
           const from = leading + match.index; const whitespace = /^\s/u.test(match[0]);
-          append(whitespace ? ' ' : match[0], { item: run.index, start: from, end: from + match[0].length }, whitespace && match[0] !== ' ' ? 'Whitespace collapsed' : null);
+          append(whitespace ? ' ' : match[0], { item: run.index, start: from, end: from + match[0].length }, whitespace && match[0] !== ' ' ? 'Whitespace collapsed' : null, run.style);
         }
         previous = run;
       }
@@ -345,7 +368,7 @@ function project(blocks, caps) {
     }
     block.end = text.length;
   }
-  return { text, segments, omitted };
+  return { text, segments, omitted, ...(emphasis.length ? { emphasis } : {}) };
 }
 
 /** Every captured source range is accounted for by body, annotations or whitespace. */

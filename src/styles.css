@@ -208,6 +208,8 @@ body:not(.scroll-mode) .page-prose .scanned-message { min-height: 0; padding-top
 .layout-line-group, .layout-speech, .layout-unknown, .layout-stage-direction { margin: 0 0 .65em; }
 .layout-stage-direction { font-style: italic; }
 .layout-speaker { font-size: .78em; letter-spacing: .035em; }
+.layout-emphasis-bold { font-weight: 700; }
+.layout-emphasis-italic { font-style: italic; }
 .layout-source-notes { flex: 0 0 auto; align-self: flex-start; margin-top: 8px; font-size: 10px; }
 .layout-annotations { margin: 12px 0; font: 14px/1.6 var(--serif); }
 .layout-annotations summary { cursor: pointer; }
