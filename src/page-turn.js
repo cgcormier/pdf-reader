@@ -5,7 +5,7 @@
  * pages only after this resolves as
  * "finished".
  */
-export async function turnPages({ stage, targetPages, direction, singlePage, signal, reducedMotion = false, duration = 420 }) {
+export async function turnPages({ stage, targetPages, direction, singlePage, signal, reducedMotion = false, duration = 160 }) {
   if (signal?.aborted) return 'cancelled';
   if (reducedMotion || duration <= 0) return 'finished';
 

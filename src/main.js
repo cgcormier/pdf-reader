@@ -13,6 +13,10 @@ import { resolveReadingPosition, readingPosition, paginateLayout, renderLayout, 
 import { preference, savePreference, getBook, putBook, updateBook, deleteBook, listBooks } from './storage.js';
 
 const $ = id => document.getElementById(id);
+// Opt-in audit sink: no text, PDF bytes, or retained production telemetry.
+function readerMetric(type, detail = {}) {
+  if (typeof window.__folioReaderMetric === 'function') window.__folioReaderMetric({ type, time: performance.now(), ...detail });
+}
 const smallScreen = matchMedia('(max-width: 820px)');
 let book = structuredClone(demo);
 let pdf = null;
@@ -510,12 +514,14 @@ function stopReadingRender() {
   pagedRenderController?.abort(); pagedRenderController = null;
 }
 function cancelPageTurn() {
+  readerMetric('cancel-request');
   stopSpreadWarmup();
   if (!turnController) return;
   turnController.abort();
   turnController = null;
   $('book-spread').setAttribute('aria-busy', 'false');
   updateControls();
+  readerMetric('cancelled');
 }
 function stopSpreadWarmup() {
   if (!spreadWarmup) return;
@@ -533,6 +539,8 @@ function warmSpreads() {
   const work = async () => {
     spreadWarmup = null;
     if (!valid()) return;
+    const started = performance.now();
+    readerMetric('warmup-start');
     try {
       // Touch the previous spread before inserting a new next spread, so LRU
       // eviction releases the distant spread rather than the one just left.
@@ -542,6 +550,7 @@ function warmSpreads() {
       }
       if (valid() && origin.next) await preparation.buffer.get(origin.next);
     } catch { /* Speculative failure stays retryable by the next actual turn. */ }
+    finally { readerMetric('warmup-end', { duration: performance.now() - started }); }
   };
   spreadWarmup = typeof window.requestIdleCallback === 'function'
     ? { idle: true, handle: window.requestIdleCallback(work, { timeout: 600 }) }
@@ -551,7 +560,8 @@ async function pageText(number, source = pdf) {
   if (!source) return { paragraphs: demo.pages[number - 1], hasText: true };
   if (!pageCache.has(number)) {
     if (pageCache.size >= 6) pageCache.delete(pageCache.keys().next().value);
-    const pending = extractPage(source, number);
+    const started = performance.now();
+    const pending = extractPage(source, number).finally(() => readerMetric('extraction', { page: number, duration: performance.now() - started }));
     pageCache.set(number, pending);
     pending.catch(() => { if (pageCache.get(number) === pending) pageCache.delete(number); });
   }
@@ -749,18 +759,26 @@ function fittedPager({ signal, renderEpoch, source }) {
         const continuation = paperPage(number, 'left', 1);
         host.append(first, continuation);
         document.body.append(host);
+        const fittingStarted = performance.now();
+        readerMetric('fitting-start', { page: number });
         try {
           const fits = (slice, { start, end }) => {
             check();
             const page = start === 0 ? first : continuation;
+            const began = performance.now();
             fillFragment(page, { page: number, start, end, text: slice, layout: data.layout });
+            const constructed = performance.now();
             const prose = page.querySelector('.page-prose');
             // Leave a pixel for rounding at the last line's lower edge.
             const last = prose.lastElementChild;
-            return prose.scrollHeight <= prose.clientHeight && (!last || last.getBoundingClientRect().bottom <= prose.getBoundingClientRect().bottom - 1);
+            const heightFits = prose.scrollHeight <= prose.clientHeight;
+            const result = heightFits && (!last || last.getBoundingClientRect().bottom <= prose.getBoundingClientRect().bottom - 1);
+            readerMetric('fit-probe', { page: number, start, end, fits: result, construction: constructed - began,
+              layout: performance.now() - constructed, reads: heightFits && last ? 4 : 2 });
+            return result;
           };
           fragments = data.layout ? paginateLayout(data.layout, fits, { signal }) : paginateText(text, fits, { signal });
-        } finally { host.remove(); }
+        } finally { host.remove(); readerMetric('fitting-end', { page: number, duration: performance.now() - fittingStarted }); }
       }
       check();
       const characters = fragments.at(-1)?.end || 0;
@@ -781,6 +799,7 @@ function readingAnchor() {
   return { page: book.page, offset: place?.page === book.page && Number.isFinite(place.offset) ? Math.max(0, place.offset) : 0 };
 }
 async function spreadPages(spread, context) {
+  const started = performance.now();
   const pages = await Promise.all(spread.leaves.map(async (fragment, i) => {
     const page = paperPage(fragment.page, i === 0 ? 'left' : 'right', fragment.start);
     page.dataset.textEnd = fragment.end;
@@ -789,6 +808,7 @@ async function spreadPages(spread, context) {
     return page;
   }));
   if (!smallScreen.matches && pages.length < 2) pages.push(paperPage(pageCount() + 1, 'right'));
+  readerMetric('spread-dom', { duration: performance.now() - started });
   return pages;
 }
 function commitSpread(spread, pages, place = spread.anchor) {
@@ -802,7 +822,9 @@ function commitSpread(spread, pages, place = spread.anchor) {
   book.bookPosition = pageLayout ? readingPosition(pageLayout, book.page, offset, place) : { page: book.page, offset };
   if (contentsNodes().some(node => node.id === selectedStructureId && node.page === book.page)) book.bookPosition.contentsId = selectedStructureId;
   book.scrollPosition = { page: book.page, fraction: 0, view: mode };
+  const started = performance.now();
   $('book-spread').replaceChildren(...pages);
+  readerMetric('visible-insertion', { duration: performance.now() - started, page: book.page, offset });
   spreadPreparation?.buffer.remember(spread.anchor, { spread, pages });
   updateReadingPosition();
 }
@@ -915,6 +937,8 @@ async function flipTo(direction) {
   const controller = new AbortController();
   turnController = controller;
   const renderEpoch = epoch;
+  const started = performance.now();
+  readerMetric('turn-start', { direction });
   const fromAnchor = fittedSpread.anchor;
   const stage = $('book-spread');
   stage.setAttribute('aria-busy', 'true');
@@ -928,10 +952,18 @@ async function flipTo(direction) {
     if (!target || (target.page === fromAnchor.page && target.offset === fromAnchor.offset)) return;
     const { spread, pages } = await preparation.buffer.get(target);
     if (controller.signal.aborted || renderEpoch !== epoch) return;
-    const result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches });
+    const animationStarted = performance.now();
+    // Fallback-only spreads need their recovery content, not a decorative wait.
+    const fallbackOnly = value => value.leaves.every(leaf => ['scan', 'error', 'overflow'].includes(leaf.kind));
+    const fallback = fallbackOnly(fittedSpread) && fallbackOnly(spread);
+    readerMetric('turn-ready', { preparation: animationStarted - started, page: spread.anchor.page, offset: spread.anchor.offset, fallback });
+    const result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches || fallback });
+    readerMetric('turn-animation', { duration: performance.now() - animationStarted, result });
     if (result !== 'finished' || controller.signal.aborted || renderEpoch !== epoch) return;
     // Only a completed turn changes the book or its saved source-page anchor.
     commitSpread(spread, pages);
+    readerMetric('turn-commit', { duration: performance.now() - started, page: spread.anchor.page, offset: spread.anchor.offset });
     persist({ positionOnly: true });
   } catch {
     if (!controller.signal.aborted && renderEpoch === epoch) toast('That page needs another try. Use Next or choose its page number.');
@@ -959,6 +991,7 @@ function navigate(number) {
   persist();
 }
 function turn(direction) {
+  readerMetric('turn-input', { direction, busy: Boolean(turnController) });
   if (turnController) return;
   if (layout === 'pages' && mode === 'book') { flipTo(direction); return; }
   const number = sourcePageNavigation(book.page, pageCount(), step())[direction];
