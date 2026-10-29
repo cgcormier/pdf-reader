@@ -76,11 +76,51 @@ direction, cancellation, DOM identity and scroll position. The independent
 review found no source blocker; rendered desktop verse and narrow mixed-emphasis
 captures were inspected. Repeated-input behavior is addressed separately in #19.
 
+## #19 input policy and verification
+
+One active turn and one pending discrete direction are allowed. A second press
+is retained; further input before completion replaces that one direction.
+Opposite input completes the active turn then turns back. This deliberately
+coalesces longer saturated bursts rather than promising one turn for every
+press. Held-key `repeat` events never create another turn, even after the first
+turn finishes. Mouse, discrete arrows, touch, and pen share this policy.
+
+Only a valid successful commit drains the pending slot. Cancellation, failure,
+or a no-op at a boundary clears it. Controls accept input while busy, including
+opposite input at the starting boundary. Resize, font/focus changes, Contents
+lookup, direct navigation, layout/view/book changes, modal opening, hidden-tab
+and reduced-motion changes clear pending and partial swipe intent. Contents
+cancels before awaiting its source lookup. Position persistence uses each actual
+committed anchor. A successfully displayed recovery fallback is still a turn.
+
+`output/playwright/navigation-performance/run-Zb03kE/report.json` passes 22
+reported cases with zero renderer errors. It compares actual visible text and
+exact persisted/reloaded source anchors against sequential navigation at
+1440px/13px and 390px/19px, with normal/reduced motion. Inputs are real browser
+mouse/keyboard and CDP touch/pen events. Repeats are tested both during and
+after a turn. Animation is temporarily paused only to make saturation,
+opposite-direction, and cancellation ordering deterministic. A real PDF worker
+text request is held to exercise repeated input during cold preparation under
+both motion settings: the final commits are source pages 2 then 3, offset zero.
+
+The cancellation matrix covers resize, direct page entry, actual Contents,
+font, focus, pointerdown/resize/pointerup, Book/Original, both layouts, hidden
+state, rejected animation, motion change, modal and book switching, plus EOF.
+Hidden state is deterministically emulated with a visibility event; it does not
+claim OS background-tab coverage. Handler request-to-cleanup measurements in
+this sample range from 0 to 7ms; they exclude OS input delivery and cold-work
+cancellation, measured separately for #20. Ordinary two-turn bursts finish in
+339–374ms normal motion and 10–62ms reduced motion (four of each, across mouse
+and keyboard). These are local observations, not asserted thresholds.
+The held-turn screenshot was visually inspected; borrowed pages remain legible
+and directional. Eleven animation/buffer checks continue to pass.
+
 ## Reproduction
 
 ```powershell
 node tests/navigation-performance.browser.mjs metrics --baseline --original-fitting
 node tests/navigation-performance.browser.mjs metrics
+node tests/navigation-performance.browser.mjs input
 node tests/fitting-performance.browser.mjs --baseline
 node tests/fitting-performance.browser.mjs
 npm.cmd test

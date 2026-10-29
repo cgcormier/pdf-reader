@@ -25,6 +25,7 @@ let layout = preference('reading-layout', 'pages') === 'pages' ? 'pages' : 'scro
 let scroller = null;
 let pagedRenderController = null;
 let turnController = null;
+let pendingTurn = null;
 let pageFillPromise = Promise.resolve();
 let fittedSpread = null;
 let spreadPreparation = null;
@@ -276,6 +277,7 @@ function updateStructureTools() {
   stop.hidden = !running; stop.disabled = Boolean(importing);
 }
 async function navigateStructure(node) {
+  cancelPageTurn();
   const navigationEpoch = ++structureNavigationEpoch;
   const source = pdf;
   const target = book;
@@ -427,10 +429,10 @@ function updateControls() {
   $('progress-percent').textContent = `${percent}%`;
   $('progress-slider').style.setProperty('--progress', `${percent}%`);
   $('progress-text').textContent = percent === 0 ? 'The beginning of something good.' : percent === 100 ? 'A good place to pause.' : 'One page at a time.';
-  $('previous-page').disabled = turnController !== null || (mode === 'book' && layout === 'pages' ? !fitted || (fitted.anchor.page === 1 && fitted.anchor.offset === 0) : navigation.previous === null);
+  $('previous-page').disabled = mode === 'book' && layout === 'pages' ? !fitted || !turnController && (fitted.anchor.page === 1 && fitted.anchor.offset === 0) : navigation.previous === null;
   $('previous-page').setAttribute('aria-label', step() === 2 ? 'Previous two pages' : 'Previous page');
   $('next-page').setAttribute('aria-label', step() === 2 ? 'Next two pages' : 'Next page');
-  $('next-page').disabled = turnController !== null || (mode === 'book' && layout === 'pages' ? !fitted || fitted.next === null : navigation.next === null);
+  $('next-page').disabled = mode === 'book' && layout === 'pages' ? !fitted || !turnController && fitted.next === null : navigation.next === null;
   const bookmarked = book.bookmarks.includes(book.page);
   $('bookmark-button').classList.toggle('is-bookmarked', bookmarked);
   $('bookmark-button').setAttribute('aria-pressed', String(bookmarked));
@@ -515,6 +517,8 @@ function stopReadingRender() {
 }
 function cancelPageTurn() {
   readerMetric('cancel-request');
+  pendingTurn = null;
+  swipeStart = null;
   stopSpreadWarmup();
   if (!turnController) return;
   turnController.abort();
@@ -932,7 +936,14 @@ async function render() {
   if (preparation === spreadPreparation) warmSpreads();
 }
 async function flipTo(direction) {
-  if (turnController || !fittedSpread) return;
+  if (turnController) {
+    // One pending direction preserves a deliberate second press. Saturated
+    // bursts coalesce to the latest direction instead of building a repeat queue.
+    pendingTurn = direction;
+    readerMetric('turn-pending', { direction });
+    return;
+  }
+  if (!fittedSpread) return;
   stopSpreadWarmup();
   const controller = new AbortController();
   turnController = controller;
@@ -941,6 +952,7 @@ async function flipTo(direction) {
   readerMetric('turn-start', { direction });
   const fromAnchor = fittedSpread.anchor;
   const stage = $('book-spread');
+  let committed = false;
   stage.setAttribute('aria-busy', 'true');
   updateControls();
   try {
@@ -963,6 +975,7 @@ async function flipTo(direction) {
     if (result !== 'finished' || controller.signal.aborted || renderEpoch !== epoch) return;
     // Only a completed turn changes the book or its saved source-page anchor.
     commitSpread(spread, pages);
+    committed = true;
     readerMetric('turn-commit', { duration: performance.now() - started, page: spread.anchor.page, offset: spread.anchor.offset });
     persist({ positionOnly: true });
   } catch {
@@ -970,9 +983,12 @@ async function flipTo(direction) {
   } finally {
     if (turnController === controller) {
       turnController = null;
+      const nextDirection = committed ? pendingTurn : null;
+      pendingTurn = null;
       stage.setAttribute('aria-busy', 'false');
       updateControls();
-      warmSpreads();
+      if (nextDirection) flipTo(nextDirection);
+      else warmSpreads();
     }
   }
 }
@@ -992,7 +1008,6 @@ function navigate(number) {
 }
 function turn(direction) {
   readerMetric('turn-input', { direction, busy: Boolean(turnController) });
-  if (turnController) return;
   if (layout === 'pages' && mode === 'book') { flipTo(direction); return; }
   const number = sourcePageNavigation(book.page, pageCount(), step())[direction];
   if (number === null) return;
@@ -1041,7 +1056,7 @@ window.addEventListener('resize', () => {
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', cancelPageTurn);
 let swipeStart = null;
 $('book-spread').addEventListener('pointerdown', event => {
-  if (layout !== 'pages' || mode !== 'book' || turnController || !['touch', 'pen'].includes(event.pointerType) || event.target.closest('button, input, a')) return;
+  if (layout !== 'pages' || mode !== 'book' || !['touch', 'pen'].includes(event.pointerType) || event.target.closest('button, input, a')) return;
   swipeStart = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp };
 }, { passive: true });
 document.addEventListener('pointerup', event => {
@@ -1078,8 +1093,11 @@ $('contents-toggle').addEventListener('click', () => {
 });
 document.addEventListener('keydown', event => {
   if ($('modal').open || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.ctrlKey || event.metaKey || event.altKey) return;
-  if (event.key === 'ArrowRight') { event.preventDefault(); $('next-page').click(); }
-  if (event.key === 'ArrowLeft') { event.preventDefault(); $('previous-page').click(); }
+  if (['ArrowRight', 'ArrowLeft'].includes(event.key)) {
+    event.preventDefault();
+    // Held keys never add navigation debt, including across completed turns.
+    if (!event.repeat) turn(event.key === 'ArrowRight' ? 'next' : 'previous');
+  }
   if (event.repeat && ['f', 's'].includes(event.key.toLowerCase())) return;
   if (event.key.toLowerCase() === 'f') toggleFocus();
   if (event.key.toLowerCase() === 's') { event.preventDefault(); setLayout(layout === 'scroll' ? 'pages' : 'scroll'); }
