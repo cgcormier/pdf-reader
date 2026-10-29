@@ -1,6 +1,6 @@
 import { LAYOUT_VERSION, layoutSlice, sourceAt, offsetForSource, resolveSource } from './pdf-layout.js';
 import { removeRepeatedChapterHeading } from './book-layout.js';
-import { paginateText } from './book-pagination.js';
+import { paginateTextSteps, runPaginationSteps } from './book-pagination.js';
 import { chapterNumber } from './document-structure.js';
 
 const renderIndexes = new WeakMap();
@@ -73,7 +73,7 @@ export function readingPosition(layout, page, offset, previous = {}) {
     ...(previous.legacyOffset != null ? { legacyOffset: previous.legacyOffset } : {}) };
 }
 
-function balanceLayoutTail(layout, fragments, fits, signal) {
+function* balanceLayoutTail(layout, fragments, signal) {
   if (fragments.length < 2) return;
   const first = fragments.at(-2); const last = fragments.at(-1);
   const length = last.end - first.start;
@@ -95,9 +95,9 @@ function balanceLayoutTail(layout, fragments, fits, signal) {
   const originalImbalance = Math.abs(first.end - midpoint);
   const boundaries = [...candidates].filter(end => end > first.start && end < first.end
     && Math.abs(end - midpoint) < originalImbalance).sort((a, b) => Math.abs(a - midpoint) - Math.abs(b - midpoint) || a - b);
-  const measure = fragment => {
+  const measure = function* (fragment) {
     if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
-    const result = fits(fragment.text, fragment);
+    const result = yield fragment;
     if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
     return result;
   };
@@ -106,14 +106,20 @@ function balanceLayoutTail(layout, fragments, fits, signal) {
     if (speaker && text.slice(speaker.start, end).trim().length <= speaker.speaker.length) continue;
     const previous = { ...first, end, text: text.slice(first.start, end) };
     const final = { ...last, start: end, text: text.slice(end, last.end) };
-    if (!measure(previous) || !measure(final)) continue;
+    // An enlarged final leaf can reject a candidate before its previous leaf
+    // needs rendering. This infers nothing about nearby candidates or DOM monotonicity.
+    if (!(yield* measure(final)) || !(yield* measure(previous))) continue;
     fragments.splice(fragments.length - 2, 2, previous, final);
     return;
   }
 }
 
 export function paginateLayout(layout, fits, { signal } = {}) {
-  const fragments = paginateText(layout.projection.text, fits, { signal });
+  return runPaginationSteps(paginateLayoutSteps(layout, { signal }), fits, { signal });
+}
+
+export function* paginateLayoutSteps(layout, { signal } = {}) {
+  const fragments = yield* paginateTextSteps(layout.projection.text, { signal });
   // Keep a label with the first word when it would otherwise end a leaf.
   for (let i = 0; i < fragments.length - 1; i++) {
     const fragment = fragments[i]; const next = fragments[i + 1];
@@ -122,12 +128,27 @@ export function paginateLayout(layout, fits, { signal } = {}) {
     fragment.end = block.start; fragment.text = layout.projection.text.slice(fragment.start, fragment.end);
     next.start = block.start; next.text = layout.projection.text.slice(next.start, next.end);
     // Moving a prefix can make the next leaf too tall. Refit the remaining tail.
-    const tail = paginateText(layout.projection.text.slice(next.start), (slice, range) => fits(slice, { start: range.start + next.start, end: range.end + next.start }), { signal });
+    // Suffix fitting retains absolute request ranges so the driver can reuse
+    // identical measurements across speaker repair and final validation.
+    const steps = paginateTextSteps(layout.projection.text.slice(next.start), { signal });
+    let step = steps.next();
+    while (!step.done) {
+      const request = step.value;
+      const result = yield { ...request, start: request.start + next.start, end: request.end + next.start };
+      step = steps.next(result);
+    }
+    const tail = step.value;
     fragments.splice(i + 1, fragments.length, ...tail.map(f => ({ ...f, start: f.start + next.start, end: f.end + next.start })));
   }
-  balanceLayoutTail(layout, fragments, fits, signal);
-  return fragments.map(fragment => ({ ...fragment, layout,
-    kind: !fits(fragment.text, fragment) ? 'overflow' : 'layout' }));
+  yield* balanceLayoutTail(layout, fragments, signal);
+  const result = [];
+  for (const fragment of fragments) {
+    if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    const fits = yield fragment;
+    if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+    result.push({ ...fragment, layout, kind: fits ? 'layout' : 'overflow' });
+  }
+  return result;
 }
 
 // Styling addresses the canonical string, so a leaf cut through an emphasized

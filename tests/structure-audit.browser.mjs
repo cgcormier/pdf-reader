@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
+import { createServer as tcpServer } from 'node:net';
 import { makeStructurePdf } from './structure-fixture.mjs';
 import { makeLayoutPdf, modestHeadingPages, runningHeaderPages } from './pdf-layout-fixture.mjs';
 import { makeProseAuditPdf, makeOpeningAuditPdf, makeDistantScrollAuditPdf, proseLines } from './audit-fixtures.mjs';
@@ -20,7 +21,9 @@ assert.ok(selected.every(issue => ['6', '9', '10', '11', '12', '13'].includes(is
 const artifacts = path.join(root, 'output', 'playwright', 'structure-reconciliation');
 await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
-const server = await createServer({ root, server: { host: '127.0.0.1', port: 0 }, clearScreen: false });
+const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
+const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
+const server = await createServer({ root, cacheDir: path.join(runDirectory, 'vite-cache'), server: { host: '127.0.0.1', port, strictPort: true, hmr: false }, clearScreen: false });
 let context;
 const report = [];
 const errors = [];
@@ -535,6 +538,7 @@ try {
   await server.listen();
   const address = server.httpServer.address();
   assert.ok(typeof address === 'object' && address.port !== 4173, 'must use isolated origin');
+  console.log(`Isolated origin http://127.0.0.1:${address.port}; ${runDirectory}`);
   context = await chromium.launchPersistentContext(path.join(runDirectory, 'profile'), {
     channel: process.env.FOLIO_CHROME_CHANNEL || 'chrome', headless: true,
     viewport: { width: 1440, height: 960 }, reducedMotion: 'reduce',
@@ -543,10 +547,13 @@ try {
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     const origin = `http://127.0.0.1:${address.port}`;
-    await page.goto(`${origin}/tests/layout-check.html`);
+    await page.goto(`${origin}/tests/fidelity-check.html`, { waitUntil: 'domcontentloaded', timeout: 90000 });
     await page.evaluate(() => localStorage.setItem('folio:active-book', JSON.stringify('demo')));
-    await page.goto(`${origin}/`);
-    await page.locator('#file-input').waitFor({ state: 'attached' });
+    await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await page.locator('#appearance-button[aria-valuenow]').waitFor({ timeout: 90000 });
+    await page.waitForFunction(() => document.body.classList.contains('scroll-mode')
+      ? document.querySelector('#scroll-stage').dataset.activeLoads === '0'
+      : document.querySelector('#book-spread').getAttribute('aria-busy') === 'false');
     try {
       await ({ 6: scannerBookmarks, 9: proseHeadings, 10: modestHeadings, 11: sourceHeaders, 12: openingTitles, 13: chapterReconciliation }[issue])(page);
     } catch (error) {

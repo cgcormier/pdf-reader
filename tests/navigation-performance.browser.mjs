@@ -1,38 +1,45 @@
 /** Production navigation measurements and input regressions on an isolated origin.
- * node tests/navigation-performance.browser.mjs [metrics|input|all] [--baseline]
+ * node tests/navigation-performance.browser.mjs [metrics|input|work|all] [--baseline]
  */
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createServer as tcpServer } from 'node:net';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeFidelityPdf } from './fidelity-fixtures.mjs';
+import { makeLayoutPdf } from './pdf-layout-fixture.mjs';
 
 const baseline = process.argv.includes('--baseline');
-const selection = process.argv.find(arg => ['metrics', 'input', 'all'].includes(arg)) || 'all';
+const selection = process.argv.find(arg => ['metrics', 'input', 'work', 'all'].includes(arg)) || 'all';
 await mkdir('output/playwright/navigation-performance', { recursive: true });
 const run = await mkdtemp('output/playwright/navigation-performance/run-');
 // Isolate #18's animation comparison while the fitting lane is developed.
 const originalFitting = process.argv.includes('--original-fitting');
+assert.ok(!originalFitting || selection === 'metrics' || selection === 'work' && baseline,
+  'Original fitting is available for metrics or diagnostic work baselines');
 const originalModules = originalFitting ? new Map(['book-pagination.js', 'layout-reading.js'].map(file =>
   [path.resolve('src', file).replaceAll('\\', '/'), execFileSync('git', ['show', `7668a92:src/${file}`], { encoding: 'utf8' })])) : new Map();
 for (const file of ['main.js', 'page-turn.js']) {
-  let code = await readFile(`src/${file}`, 'utf8');
+  let code = originalFitting && file === 'main.js'
+    ? execFileSync('git', ['show', '5263318:src/main.js'], { encoding: 'utf8' }) : await readFile(`src/${file}`, 'utf8');
   if (baseline && originalFitting) code = file === 'page-turn.js' ? code.replace('duration = 160', 'duration = 420') : code.replace('.matches || fallback', '.matches');
   originalModules.set(path.resolve('src', file).replaceAll('\\', '/'), code);
 }
+const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
+const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
 const server = await createServer({ cacheDir: `${run}/vite-cache`, plugins: [{ name: 'audit-original-fitting', enforce: 'pre', load: id => originalModules.get(id) }],
-  server: { host: '127.0.0.1', port: 0, hmr: false, watch: null }, clearScreen: false });
+  server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const report = { baseline, originalFitting, environment: { platform: os.platform(), release: os.release(), cpu: os.cpus()[0]?.model, cores: os.cpus().length, node: process.version }, metrics: [], input: [], errors: [] };
+const report = { baseline, originalFitting, environment: { platform: os.platform(), release: os.release(), cpu: os.cpus()[0]?.model, cores: os.cpus().length, node: process.version }, metrics: [], input: [], work: [], errors: [] };
 let context;
 async function settled(page) {
   await page.waitForFunction(() => !document.querySelector('#modal').open && (document.body.classList.contains('scroll-mode')
     ? document.querySelector('#scroll-stage').dataset.activeLoads === '0'
     : document.querySelector('#book-spread').getAttribute('aria-busy') === 'false'
-      && Boolean(document.querySelector('#book-spread > .paper-page .page-prose'))));
+      && Boolean(document.querySelector('#book-spread > .paper-page .page-prose p, #book-spread > .paper-page .layout-block, #book-spread > .paper-page canvas'))));
 }
 async function stored(page) {
   return page.evaluate(async () => {
@@ -81,9 +88,11 @@ async function visibleText(page) {
 }
 async function clear(page) { await page.evaluate(() => { window.auditEvents = []; }); }
 async function warm(page) {
-  await page.evaluate(async () => {
+  return page.evaluate(async () => {
+    const index = window.auditEvents.length;
     const callback = window.auditIdle; window.auditIdle = null;
     if (callback) await callback({ didTimeout: true, timeRemaining: () => 0 });
+    return window.auditEvents.slice(index);
   });
 }
 async function turnMetric(page) {
@@ -131,16 +140,28 @@ async function metrics(page) {
           await jump(page);
           for (let repeat = 0; repeat < 3; repeat++) {
             if (await page.locator('#next-page').isDisabled()) await jump(page);
-            if (prepared) await warm(page);
+            const warmup = prepared ? await warm(page) : [];
             const metric = await turnMetric(page);
             assert.ok(metric.anchor, `${name}: no completed turn`);
-            report.metrics.push({ name, width, textSize, motion, prepared, repeat, ...metric });
+            report.metrics.push({ name, width, textSize, motion, prepared, repeat, warmup,
+              idlePreparationMs: warmup.find(e => e.type === 'warmup-end')?.duration || 0,
+              idleProbes: warmup.filter(e => e.type === 'fit-probe').length,
+              idleLayoutReads: warmup.filter(e => e.type === 'fit-probe').reduce((n, e) => n + e.reads, 0), ...metric });
           }
           await page.screenshot({ path: `${run}/${name}-${width}-${textSize}-${motion}-${prepared}.png` });
         }
       }
     }
   }
+}
+function distributions(rows) {
+  const keys = ['visibleMs', 'committedMs', 'preparationMs', 'animationMs', 'extractionMs', 'visibleInsertionMs',
+    'probes', 'candidateReconstructions', 'layoutReads', 'candidateMs', 'layoutMs', 'idlePreparationMs', 'idleProbes', 'idleLayoutReads'];
+  return Object.fromEntries(keys.map(key => {
+    const values = rows.map(row => row[key]).filter(Number.isFinite).sort((a, b) => a - b);
+    const quantile = p => values[Math.max(0, Math.ceil(values.length * p) - 1)];
+    return [key, { n: values.length, min: values[0], p50: quantile(.5), p95: quantile(.95), max: values.at(-1) }];
+  }));
 }
 async function input(page) {
   await importPdf(page, 'rapid-source', fixtures[0][1]);
@@ -287,6 +308,97 @@ async function input(page) {
   }
   await cdp.detach();
 }
+async function work(page) {
+  await size(page, 390, 23); await page.emulateMedia({ reducedMotion: 'reduce' });
+  const bytes = makeLayoutPdf(Array.from({ length: 6 }, (_, i) => ({ items: [{
+    text: i === 2 ? 'dense words carry exact source text. '.repeat(1000) : `Short source page ${i + 1}.`,
+    x: 40, y: 700, ...(i === 2 ? { matrix: '.001 0 0 1 40 700' } : {}),
+  }] })));
+  await importPdf(page, 'dense-cooperative-source', Buffer.from(bytes));
+  if (baseline) {
+    await jump(page); await clear(page);
+    await warm(page);
+    await page.waitForFunction(() => window.auditEvents.some(e => e.type === 'fit-timer' && e.page === 3));
+    const events = await page.evaluate(() => window.auditEvents);
+    const start = events.find(e => e.type === 'fitting-start' && e.page === 3);
+    const timer = events.find(e => e.type === 'fit-timer' && e.page === 3);
+    const end = events.find(e => e.type === 'fitting-end' && e.page === 3);
+    report.work.push({ diagnostic: true, timerDelayMs: timer.time - start.time,
+      fittingElapsedMs: end.time - start.time, probes: events.filter(e => e.type === 'fit-probe' && e.page === 3).length, events });
+    return;
+  }
+  async function beginWarmup() {
+    await jump(page); await clear(page);
+    await page.evaluate(() => {
+      const callback = window.auditIdle; window.auditIdle = null;
+      window.auditWarmPromise = callback({ didTimeout: true, timeRemaining: () => 0 });
+    });
+    await page.waitForFunction(() => window.auditEvents.some(e => e.type === 'fit-yield'));
+  }
+  await beginWarmup();
+  const before = (await stored(page)).bookPosition;
+  const requested = await page.evaluate(() => performance.now());
+  await page.locator('#text-help-button').click();
+  await page.waitForFunction(() => !document.querySelector('.book-measure') && window.auditEvents.some(e => e.type === 'warmup-end'));
+  let events = await page.evaluate(() => window.auditEvents);
+  assert.ok(events.some(e => e.type === 'fitting-end' && e.aborted), 'idle timeout fitting did not abort');
+  assert.deepEqual((await stored(page)).bookPosition, before, 'idle cancellation changed anchor');
+  report.work.push({ idleTimeoutCancellation: true, requested, events });
+  await page.locator('#modal-close').click();
+
+  await beginWarmup(); await rawClick(page, 'next-page'); await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => window.auditEvents.some(e => e.type === 'turn-pending'));
+  await jump(page, 5);
+  await page.waitForFunction(() => !document.querySelector('.book-measure'));
+  events = await page.evaluate(() => window.auditEvents);
+  assert.equal(events.filter(e => e.type === 'turn-commit').length, 0, 'cancelled cold turn committed');
+  assert.equal((await stored(page)).bookPosition.page, 5, 'direct cancellation lost target page');
+  report.work.push({ foregroundCancellation: true, events });
+
+  await beginWarmup(); await rawClick(page, 'next-page'); await settled(page);
+  events = await page.evaluate(() => window.auditEvents);
+  assert.equal(events.filter(e => e.type === 'fitting-start' && e.page === 3).length, 1, 'warmup/foreground duplicated fitting');
+  const probes = events.filter(e => e.type === 'fit-probe' && e.page === 3);
+  assert.ok(probes.length > 100, 'dense production fitting was not exercised');
+  assert.equal(new Set(probes.map(e => `${e.start}:${e.end}`)).size, probes.length, 'duplicate dense DOM range reconstruction');
+  assert.ok(events.filter(e => e.type === 'fragment-cache').every(e => e.pages <= 6 && e.characters <= 250000));
+  assert.ok(events.filter(e => e.type === 'spread-cache').every(e => e.entries <= 3 && e.nodes <= 1200));
+  assert.equal((await stored(page)).bookPosition.page, 2, 'shared preparation committed wrong source');
+  await reloadBook(page); assert.equal((await stored(page)).bookPosition.page, 2, 'shared preparation reload anchor');
+  report.work.push({ sharedPreparation: true, probes: probes.length, events });
+  for (const interruption of ['font', 'resize', 'hidden', 'modal']) {
+    await size(page, 390, 13); await jump(page); await clear(page);
+    await page.locator('#page-input').fill('3'); await page.locator('#page-input').press('Enter'); await page.locator('#page-input').blur();
+    await page.waitForFunction(() => window.auditEvents.some(e => e.type === 'fit-yield'));
+    assert.equal(await page.locator('#book-spread .layout-block').count(), 0, `${interruption}: initial-fit gate missed`);
+    if (interruption === 'font') await page.locator('#appearance-button').press('End');
+    if (interruption === 'resize') await page.setViewportSize({ width: 410, height: 844 });
+    if (interruption === 'hidden') await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    if (interruption === 'modal') await page.locator('#text-help-button').click();
+    if (['hidden', 'modal'].includes(interruption)) {
+      await page.waitForFunction(() => !document.querySelector('.book-measure'));
+      assert.equal(await page.locator('#book-spread .layout-block').count(), 0, `${interruption}: obsolete initial fit committed`);
+      if (interruption === 'hidden') await page.evaluate(() => {
+        delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'));
+      });
+      else await page.locator('#modal-close').click();
+    }
+    await settled(page);
+    const result = await page.locator('#book-spread > .paper-page .page-prose').evaluateAll(nodes => nodes.map(prose => ({
+      size: parseFloat(getComputedStyle(prose).fontSize), fits: prose.scrollHeight <= prose.clientHeight
+        && prose.lastElementChild.getBoundingClientRect().bottom <= prose.getBoundingClientRect().bottom - 1,
+    })));
+    assert.ok(result.every(item => item.fits && item.size === (interruption === 'font' ? 23 : 13)), `${interruption}: final style generation did not fit`);
+    events = await page.evaluate(() => window.auditEvents);
+    assert.ok(events.some(e => e.type === 'fitting-end' && e.aborted), `${interruption}: obsolete initial fitting was not aborted`);
+    assert.equal(events.filter(e => e.type === 'visible-insertion' && e.page === 3).length, 1, `${interruption}: stale initial generation committed`);
+    assert.equal((await stored(page)).bookPosition.page, 3);
+    report.work.push({ initialInterruption: interruption, result, events });
+  }
+}
 try {
   await server.listen();
   context = await chromium.launchPersistentContext(`${run}/profile`, { channel: 'chrome', headless: true, viewport: { width: 1440, height: 900 } });
@@ -297,6 +409,7 @@ try {
     window.cancelIdleCallback = () => { window.auditIdle = null; };
     window.__folioReaderMetric = event => {
       window.auditEvents.push(event);
+      if (event.type === 'fitting-start') setTimeout(() => window.auditEvents.push({ type: 'fit-timer', page: event.page, time: performance.now() }), 0);
       if (event.type !== 'turn-start') return;
       let sawVisible = false;
       const inspect = () => {
@@ -349,9 +462,23 @@ try {
   await page.evaluate(() => localStorage.setItem('folio:active-book', JSON.stringify('demo')));
   await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.locator('#appearance-button[role="slider"]').waitFor({ timeout: 90000 }); await settled(page);
-  if (selection !== 'input') await metrics(page);
-  if (selection !== 'metrics') await input(page);
+  if (selection === 'metrics' || selection === 'all') await metrics(page);
+  if (selection === 'input' || selection === 'all') await input(page);
+  if (selection === 'work' || selection === 'all') await work(page);
   assert.deepEqual(report.errors, []);
   console.log(`PASS ${selection}${baseline ? ' baseline diagnostic' : ''}; evidence: ${run}`);
-} catch (error) { report.failure = error.stack; throw error; }
-finally { await writeFile(`${run}/report.json`, JSON.stringify(report, null, 2)); await context?.close(); await server.close(); }
+} catch (error) { report.failure = error.stack; await context?.pages()[0]?.screenshot({ path: `${run}/failure.png` }).catch(() => {}); throw error; }
+finally {
+  report.distributions = [];
+  for (const motion of ['no-preference', 'reduce']) for (const prepared of [false, true]) {
+    const rows = report.metrics.filter(row => row.motion === motion && row.prepared === prepared);
+    if (rows.length) report.distributions.push({ motion, prepared, ...distributions(rows) });
+  }
+  report.byCase = [];
+  for (const name of fixtures.map(([name]) => name)) for (const width of [1440, 390]) for (const textSize of [13, 19])
+    for (const motion of ['no-preference', 'reduce']) for (const prepared of [false, true]) {
+      const rows = report.metrics.filter(row => row.name === name && row.width === width && row.textSize === textSize && row.motion === motion && row.prepared === prepared);
+      if (rows.length) report.byCase.push({ name, width, textSize, motion, prepared, ...distributions(rows) });
+    }
+  await writeFile(`${run}/report.json`, JSON.stringify(report, null, 2)); await context?.close(); await server.close();
+}

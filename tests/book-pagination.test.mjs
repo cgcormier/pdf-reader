@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBookPager, fragmentAt, paginateText } from '../src/book-pagination.js';
-import { paginateLayout, renderLayout } from '../src/layout-reading.js';
+import { createBookPager, fragmentAt, paginateText, paginateTextSteps, runPaginationSteps, FIT_CACHE_LIMIT } from '../src/book-pagination.js';
+import { paginateLayout, paginateLayoutSteps, renderLayout } from '../src/layout-reading.js';
 
 test('pagination preserves every character and prefers whitespace boundaries', () => {
   const text = 'First paragraph.\n\nSecond paragraph, with spaces.  End.';
@@ -338,4 +338,99 @@ test('tail balancing preserves empty and oversized leaves and aborts extra fit p
     return slice.length <= 1000;
   }, { signal: controller.signal }), { name: 'AbortError' });
   assert.equal(calls, greedyCalls + 1);
+});
+
+test('step and synchronous pagination preserve identical absolute UTF-16 fragments', () => {
+  const text = 'A\u{1f600} word\n\nthen another measured source word. '.repeat(30);
+  const layout = paragraphLayout(text);
+  const fits = (slice, { start }) => slice.length <= (start === 0 ? 87 : 103);
+  for (const [steps, expected] of [
+    [paginateTextSteps(text), paginateText(text, fits)],
+    [paginateLayoutSteps(layout), paginateLayout(layout, fits)],
+  ]) {
+    const actual = runPaginationSteps(steps, (slice, range) => {
+      assert.equal(slice, text.slice(range.start, range.end));
+      return fits(slice, range);
+    });
+    assert.deepEqual(actual, expected);
+    assert.equal(actual.map(fragment => fragment.text).join(''), text);
+  }
+});
+
+test('exact range measurements are reused through balancing and final classification', () => {
+  const text = 'x '.repeat(500) + 'z'.repeat(74);
+  const measured = new Set();
+  const fragments = paginateLayout(paragraphLayout(text), (slice, { start, end }) => {
+    const key = `${start}:${end}`;
+    assert.ok(!measured.has(key), `repeated exact probe ${key}`); measured.add(key);
+    return slice.length <= 1000;
+  });
+  assert.ok(fragments.every(fragment => measured.has(`${fragment.start}:${fragment.end}`)));
+  assert.ok(fragments.every(fragment => fragment.kind === 'layout'));
+  let overflowProbes = 0;
+  assert.equal(paginateLayout(paragraphLayout('\u{1f600}'), () => { overflowProbes++; return false; })[0].kind, 'overflow');
+  assert.equal(overflowProbes, 1, 'oversized glyph still receives one exact measurement');
+});
+
+test('speaker suffix refits yield absolute ranges and preserve contiguous source text', () => {
+  const text = 'x '.repeat(47) + ' GUIDE\n\n' + 'reply '.repeat(40);
+  const layout = paragraphLayout(text);
+  layout.blocks = [
+    { id: 'opening', role: 'paragraph', start: 0, end: 94, lines: [] },
+    { id: 'speaker', role: 'speech', speaker: 'GUIDE', start: 95, end: 100, lines: [{ start: 95, end: 100 }] },
+    { id: 'reply', role: 'line-group', start: 102, end: text.length, lines: [{ start: 102, end: text.length }] },
+  ];
+  let repairedProbe = false;
+  const fragments = runPaginationSteps(paginateLayoutSteps(layout), (slice, { start, end }) => {
+    assert.equal(slice, text.slice(start, end));
+    if (start === 95) repairedProbe = true;
+    return slice.length <= 101;
+  });
+  assert.equal(repairedProbe, true);
+  assert.equal(fragments[0].end, 95);
+  assert.equal(fragments[1].start, 95);
+  assert.equal(fragments.map(fragment => fragment.text).join(''), text);
+  assert.ok(fragments.every((fragment, index) => fragment.start === (index ? fragments[index - 1].end : 0)));
+});
+
+test('range memo is invocation-local and evicts old probes at its fixed bound', () => {
+  function* steps() {
+    for (let start = 0; start <= FIT_CACHE_LIMIT; start++) yield { text: 'x', start, end: start + 1 };
+    yield { text: 'x', start: FIT_CACHE_LIMIT, end: FIT_CACHE_LIMIT + 1 };
+    yield { text: 'x', start: 0, end: 1 };
+  }
+  for (let invocation = 0; invocation < 2; invocation++) {
+    let probes = 0;
+    runPaginationSteps(steps(), () => { probes++; return true; });
+    assert.equal(probes, FIT_CACHE_LIMIT + 2, 'recent probe reused; oldest evicted; new invocation measures again');
+  }
+});
+
+test('a suspended fitting generator observes cancellation before another probe', async () => {
+  const controller = new AbortController();
+  const steps = paginateLayoutSteps(paragraphLayout('source words '.repeat(300)), { signal: controller.signal });
+  const first = steps.next(); assert.equal(first.done, false);
+  const result = first.value.text.length <= 100;
+  await new Promise(resolve => setTimeout(() => { controller.abort(); resolve(); }, 0));
+  assert.throws(() => steps.next(result), { name: 'AbortError' });
+});
+
+test('cancellation is checked for cached requests as well as new DOM probes', () => {
+  const controller = new AbortController(); let probes = 0;
+  function* steps() {
+    yield { text: 'x', start: 0, end: 1 };
+    controller.abort();
+    yield { text: 'x', start: 0, end: 1 };
+  }
+  assert.throws(() => runPaginationSteps(steps(), () => { probes++; return true; }, { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(probes, 1);
+});
+
+test('failed final-pair candidates do not infer fitting bounds from nearby suffixes', () => {
+  const text = 'x '.repeat(500) + 'z'.repeat(74);
+  const fragments = paginateLayout(paragraphLayout(text), (slice, { start }) =>
+    start === 0 ? slice.length <= 1000 : start === 550 || start >= 1000 && slice.length <= 74);
+  assert.deepEqual(fragments.map(({ start, end }) => ({ start, end })), [{ start: 0, end: 550 }, { start: 550, end: 1074 }]);
+  assert.equal(fragments.map(fragment => fragment.text).join(''), text);
+  assert.ok(fragments.every(fragment => fragment.kind === 'layout'));
 });

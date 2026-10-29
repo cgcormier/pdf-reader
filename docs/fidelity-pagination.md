@@ -1,5 +1,10 @@
 # October 26 fidelity and pagination audit, batch three
 
+The subsequent local #18–#20 navigation and fitting work is recorded in
+[navigation-performance.md](navigation-performance.md), on a focused branch
+retaining all three completed audit batches. The results below remain the
+batch-three verification record.
+
 Scope: tracker #3 item 3, issues #14–#17. Local branch
 `fix/reader-fidelity-pagination` starts at verified `11231c6` on
 `fix/reader-structure-reconciliation`. Ancestry checks include

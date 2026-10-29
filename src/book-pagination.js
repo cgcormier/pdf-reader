@@ -2,6 +2,33 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
 }
 
+export const FIT_CACHE_LIMIT = 4096;
+
+/** Drive the same fitting requests used by the reader's cooperative DOM fitter. */
+export function runPaginationSteps(steps, fits, { signal } = {}) {
+  if (typeof fits !== 'function') throw new TypeError('fits must be a function');
+  const measured = new Map();
+  let step = steps.next();
+  while (!step.done) {
+    throwIfAborted(signal);
+    const fragment = step.value;
+    const key = `${fragment.start}:${fragment.end}`;
+    let result;
+    if (measured.has(key)) result = measured.get(key);
+    else {
+      result = fits(fragment.text, fragment);
+      throwIfAborted(signal);
+      // A pathological source page can generate many balancing candidates. Keep
+      // exact-range reuse local and bounded rather than retaining its entire search.
+      if (measured.size >= FIT_CACHE_LIMIT) measured.delete(measured.keys().next().value);
+      measured.set(key, result);
+    }
+    throwIfAborted(signal);
+    step = steps.next(result);
+  }
+  return step.value;
+}
+
 function safeBoundaryAtOrBefore(text, index) {
   if (index > 0 && index < text.length) {
     const current = text.charCodeAt(index);
@@ -16,14 +43,14 @@ function nextCodePointBoundary(text, index) {
   return index + (codePoint > 0xffff ? 2 : 1);
 }
 
-function largestFittingEnd(text, start, fits, signal, hint) {
+function* largestFittingEnd(text, start, signal, hint) {
   let low = start + 1;
   let high = text.length;
   let best = start;
 
-  const measure = end => {
+  const measure = function* (end) {
     throwIfAborted(signal);
-    const result = fits(text.slice(start, end), { start, end });
+    const result = yield { text: text.slice(start, end), start, end };
     throwIfAborted(signal);
     return result;
   };
@@ -33,19 +60,19 @@ function largestFittingEnd(text, start, fits, signal, hint) {
   let span = hint;
   let end = safeBoundaryAtOrBefore(text, Math.min(text.length, start + span));
   if (end <= start) end = nextCodePointBoundary(text, start);
-  if (!measure(end)) high = end - 1;
+  if (!(yield* measure(end))) high = end - 1;
   else {
     best = end;
     if (best === text.length) return best;
     const adjacent = nextCodePointBoundary(text, best);
-    if (!measure(adjacent)) return best;
+    if (!(yield* measure(adjacent))) return best;
     best = adjacent;
     if (best === text.length) return best;
     while (best < text.length) {
       span = Math.max(span * 2, best - start + 1);
       end = safeBoundaryAtOrBefore(text, Math.min(text.length, start + span));
       if (end <= best) end = nextCodePointBoundary(text, best);
-      if (!measure(end)) { low = best + 1; high = end - 1; break; }
+      if (!(yield* measure(end))) { low = best + 1; high = end - 1; break; }
       best = end;
       if (best === text.length) return best;
     }
@@ -60,7 +87,7 @@ function largestFittingEnd(text, start, fits, signal, hint) {
       continue;
     }
 
-    if (measure(end)) {
+    if (yield* measure(end)) {
       best = end;
       low = middle + 1;
     } else {
@@ -81,6 +108,12 @@ function lastWhitespaceEnd(text, start, end) {
 export function paginateText(text, fits, { signal } = {}) {
   if (typeof text !== 'string') throw new TypeError('text must be a string');
   if (typeof fits !== 'function') throw new TypeError('fits must be a function');
+  return runPaginationSteps(paginateTextSteps(text, { signal }), fits, { signal });
+}
+
+/** Yield exact UTF-16 fit requests; callers may pause between DOM measurements. */
+export function* paginateTextSteps(text, { signal } = {}) {
+  if (typeof text !== 'string') throw new TypeError('text must be a string');
   throwIfAborted(signal);
   if (text.length === 0) return [{ start: 0, end: 0, text: '' }];
 
@@ -89,7 +122,7 @@ export function paginateText(text, fits, { signal } = {}) {
   let hint = 512;
   while (start < text.length) {
     throwIfAborted(signal);
-    const fittingEnd = largestFittingEnd(text, start, fits, signal, hint);
+    const fittingEnd = yield* largestFittingEnd(text, start, signal, hint);
     hint = Math.max(1, fittingEnd - start);
     const whitespaceEnd = fittingEnd > start ? lastWhitespaceEnd(text, start, fittingEnd) : start;
     let end = fittingEnd === text.length

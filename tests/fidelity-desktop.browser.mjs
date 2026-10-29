@@ -36,6 +36,11 @@ async function launch() {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.locator('#file-input').waitFor({ state: 'attached' });
+  await page.locator('#appearance-button[aria-valuenow]').waitFor();
+  const restored = await stored();
+  if (restored) await page.waitForFunction(title => document.querySelector('#book-type').textContent === 'FROM YOUR SHELF'
+    && document.querySelector('#book-title').textContent === title && !document.querySelector('#modal').open, restored.title);
+  await settled();
 }
 async function stop() {
   if (!child) return;
@@ -78,7 +83,8 @@ async function settled() {
     if (document.querySelector('#modal').open) return false;
     if (document.body.classList.contains('scroll-mode')) return !!document.querySelector('.scroll-page .layout-block, .scroll-page canvas');
     if (document.querySelector('#original-view').getAttribute('aria-pressed') === 'true') return !!document.querySelector('#original-stage canvas');
-    return document.querySelector('#book-spread').getAttribute('aria-busy') === 'false' && !!document.querySelector('#book-spread .paper-page');
+    return document.querySelector('#book-spread').getAttribute('aria-busy') === 'false'
+      && !!document.querySelector('#book-spread .page-prose p, #book-spread .layout-block, #book-spread canvas');
   });
 }
 async function jump(number) {
@@ -192,6 +198,18 @@ try {
       results.push({ nietzschePage3: [...firstPair, final] });
     }
   }
+  // Compare a real production mouse/key burst with two sequential source turns.
+  await page.locator('#pages-layout').click(); await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await jump(3);
+  for (let i = 0; i < 2; i++) { await page.locator('#next-page').click(); await settled(); }
+  const reference = await stored();
+  const text = await page.locator('#book-spread > .paper-page').allTextContents();
+  await jump(3); await page.locator('#next-page').click(); await page.keyboard.press('ArrowRight'); await settled();
+  const burst = await until(stored, b => b?.bookPosition?.offset === reference.bookPosition.offset && b.page === reference.page, 'production rapid burst');
+  assert.deepEqual(burst.bookPosition, reference.bookPosition);
+  assert.deepEqual(await page.locator('#book-spread > .paper-page').allTextContents(), text, 'production burst skipped or duplicated text');
+  await shot('production-rapid-burst-normal');
+  results.push({ rapidInput: 'normal-motion real mouse/key burst equals two sequential turns', anchor: burst.bookPosition });
   const beforeRestart = await stored();
   await stop(); await launch();
   const afterRestart = await until(stored, b => b?.id === nietzsche.id && b.structure?.status === 'complete', 'desktop restart');

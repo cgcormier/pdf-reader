@@ -6,10 +6,10 @@ import { demo } from './demo.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
 import { turnPages } from './page-turn.js';
-import { paginateText, createBookPager } from './book-pagination.js';
+import { FIT_CACHE_LIMIT, paginateTextSteps, createBookPager } from './book-pagination.js';
 import { createSpreadBuffer } from './spread-buffer.js';
 import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
-import { resolveReadingPosition, readingPosition, paginateLayout, renderLayout, renderAnnotations, hasSourceChapterTitle } from './layout-reading.js';
+import { resolveReadingPosition, readingPosition, paginateLayoutSteps, renderLayout, renderAnnotations, hasSourceChapterTitle } from './layout-reading.js';
 import { preference, savePreference, getBook, putBook, updateBook, deleteBook, listBooks } from './storage.js';
 
 const $ = id => document.getElementById(id);
@@ -30,6 +30,7 @@ let pageFillPromise = Promise.resolve();
 let fittedSpread = null;
 let spreadPreparation = null;
 let spreadWarmup = null;
+let interruptedRender = false;
 const fragmentCache = new Map();
 let fragmentCharacters = 0;
 const fragmentCharacterBudget = 250_000;
@@ -181,7 +182,7 @@ function applyAppearance() {
   savePreference('appearance', appearance);
   scroller?.reflow();
   if (scrollAnchor) restoreScrollAnchor(scrollAnchor);
-  if (fittedSpread && mode === 'book' && layout === 'pages') render();
+  if (pagedRenderController && mode === 'book' && layout === 'pages') render();
 }
 applyAppearance();
 attachTextSizeScrubber();
@@ -520,13 +521,34 @@ function cancelPageTurn() {
   pendingTurn = null;
   swipeStart = null;
   stopSpreadWarmup();
-  if (!turnController) return;
-  turnController.abort();
+  if (!fittedSpread && spreadPreparation) {
+    spreadPreparation.controller.abort(); spreadPreparation.buffer.clear();
+    spreadPreparation = null;
+    // An initial fit has no committed pages to restore. Resume it after the
+    // modal/visibility/resize interruption, with a fresh typography generation.
+    interruptedRender = true;
+    queueMicrotask(resumeInterruptedRender);
+  }
+  if (!turnController && !fittedSpread) return;
+  turnController?.abort();
   turnController = null;
+  if (fittedSpread && spreadPreparation) {
+    // Foreground and idle work share this generation. Abort both before replacing
+    // it, retaining only the currently displayed nodes for a safe next request.
+    const previous = spreadPreparation;
+    previous.controller.abort(); previous.buffer.clear();
+    spreadPreparation = createSpreadPreparation(previous.context);
+    const pages = [...$('book-spread').children].filter(node => node.classList.contains('paper-page'));
+    spreadPreparation.buffer.remember(fittedSpread.anchor, { spread: fittedSpread, pages });
+  }
   $('book-spread').setAttribute('aria-busy', 'false');
   updateControls();
   readerMetric('cancelled');
 }
+function resumeInterruptedRender() {
+  if (interruptedRender && !resizeTimer && !$('modal').open && document.visibilityState !== 'hidden') render();
+}
+$('modal').addEventListener('close', resumeInterruptedRender);
 function stopSpreadWarmup() {
   if (!spreadWarmup) return;
   if (spreadWarmup.idle) window.cancelIdleCallback(spreadWarmup.handle);
@@ -729,74 +751,120 @@ function fillFragment(page, fragment) {
     });
   }
 }
+async function fitPageSteps(steps, fits, check) {
+  const measured = new Map();
+  let batch = performance.now(); let requests = 0;
+  let step = steps.next();
+  while (!step.done) {
+    check();
+    // Idle timeout does not grant an unbounded task. Yield at the same budget
+    // for foreground and speculative work; a single DOM probe is indivisible.
+    if (performance.now() - batch >= 8 || requests >= 32) {
+      readerMetric('fit-yield', { duration: performance.now() - batch, requests });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      check(); batch = performance.now(); requests = 0;
+    }
+    const fragment = step.value; const key = `${fragment.start}:${fragment.end}`;
+    let result;
+    if (measured.has(key)) { result = measured.get(key); readerMetric('fit-reuse'); }
+    else {
+      result = fits(fragment.text, fragment);
+      check();
+      if (measured.size >= FIT_CACHE_LIMIT) measured.delete(measured.keys().next().value);
+      measured.set(key, result);
+    }
+    check(); requests++;
+    step = steps.next(result);
+  }
+  readerMetric('fit-slice-end', { duration: performance.now() - batch, requests, entries: measured.size });
+  return step.value;
+}
 function fittedPager({ signal, renderEpoch, source }) {
   const check = () => {
     if (signal.aborted || renderEpoch !== epoch) throw new DOMException('Reading layout changed.', 'AbortError');
   };
-  return createBookPager({
-    count: pageCount(),
-    loadFragments: async number => {
-      check();
-      if (fragmentCache.has(number)) {
-        const fragments = fragmentCache.get(number);
-        fragmentCache.delete(number); fragmentCache.set(number, fragments);
-        return fragments;
-      }
-      let data;
-      try { data = await pageText(number, source); }
-      catch { check(); return [{ start: 0, end: 0, text: '', kind: 'error' }]; }
-      check();
-      // Another consumer may have finished fitting while extraction was pending.
-      if (fragmentCache.has(number)) return fragmentCache.get(number);
-      let fragments;
-      if (!data.hasText) fragments = [{ start: 0, end: 0, text: '', kind: 'scan' }];
-      else {
-        const chapter = currentChapter(number);
-        const paragraphs = source && chapter.page === number ? removeRepeatedChapterHeading(data.paragraphs, chapter.title) : data.paragraphs;
-        const text = data.layout?.projection.text ?? paragraphs.join('\n\n');
-        const bounds = $('book-spread').getBoundingClientRect();
-        const host = el('div', 'book-measure');
-        host.setAttribute('aria-hidden', 'true'); host.inert = true;
-        host.style.width = `${bounds.width / (smallScreen.matches ? 1 : 2)}px`;
-        host.style.height = `${bounds.height}px`;
-        const first = paperPage(number, 'left');
-        const continuation = paperPage(number, 'left', 1);
-        host.append(first, continuation);
-        document.body.append(host);
-        const fittingStarted = performance.now();
-        readerMetric('fitting-start', { page: number });
-        try {
-          const fits = (slice, { start, end }) => {
-            check();
-            const page = start === 0 ? first : continuation;
-            const began = performance.now();
-            fillFragment(page, { page: number, start, end, text: slice, layout: data.layout });
-            const constructed = performance.now();
-            const prose = page.querySelector('.page-prose');
-            // Leave a pixel for rounding at the last line's lower edge.
-            const last = prose.lastElementChild;
-            const heightFits = prose.scrollHeight <= prose.clientHeight;
-            const result = heightFits && (!last || last.getBoundingClientRect().bottom <= prose.getBoundingClientRect().bottom - 1);
-            readerMetric('fit-probe', { page: number, start, end, fits: result, construction: constructed - began,
-              layout: performance.now() - constructed, reads: heightFits && last ? 4 : 2 });
-            return result;
-          };
-          fragments = data.layout ? paginateLayout(data.layout, fits, { signal }) : paginateText(text, fits, { signal });
-        } finally { host.remove(); readerMetric('fitting-end', { page: number, duration: performance.now() - fittingStarted }); }
-      }
-      check();
-      const characters = fragments.at(-1)?.end || 0;
-      if (characters <= fragmentCharacterBudget) {
-        while (fragmentCache.size >= 6 || fragmentCharacters + characters > fragmentCharacterBudget) {
-          const oldest = fragmentCache.keys().next().value;
-          fragmentCharacters -= fragmentCache.get(oldest).at(-1)?.end || 0;
-          fragmentCache.delete(oldest);
-        }
-        fragmentCache.set(number, fragments); fragmentCharacters += characters;
-      }
+  const pending = new Map();
+  const load = async number => {
+    check();
+    if (fragmentCache.has(number)) {
+      const fragments = fragmentCache.get(number);
+      fragmentCache.delete(number); fragmentCache.set(number, fragments);
       return fragments;
-    },
-  });
+    }
+    let data;
+    try { data = await pageText(number, source); }
+    catch { check(); return [{ start: 0, end: 0, text: '', kind: 'error' }]; }
+    check();
+    // Another consumer may have finished fitting while extraction was pending.
+    if (fragmentCache.has(number)) return fragmentCache.get(number);
+    let fragments;
+    if (!data.hasText) fragments = [{ start: 0, end: 0, text: '', kind: 'scan' }];
+    else {
+      const chapter = currentChapter(number);
+      const paragraphs = source && chapter.page === number ? removeRepeatedChapterHeading(data.paragraphs, chapter.title) : data.paragraphs;
+      const text = data.layout?.projection.text ?? paragraphs.join('\n\n');
+      const bounds = $('book-spread').getBoundingClientRect();
+      const host = el('div', 'book-measure');
+      host.setAttribute('aria-hidden', 'true'); host.inert = true;
+      host.style.width = `${bounds.width / (smallScreen.matches ? 1 : 2)}px`;
+      host.style.height = `${bounds.height}px`;
+      const first = paperPage(number, 'left');
+      const continuation = paperPage(number, 'left', 1);
+      host.append(first, continuation);
+      document.body.append(host);
+      const fittingStarted = performance.now();
+      readerMetric('fitting-start', { page: number });
+      try {
+        const fits = (slice, { start, end }) => {
+          check();
+          const page = start === 0 ? first : continuation;
+          const began = performance.now();
+          fillFragment(page, { page: number, start, end, text: slice, layout: data.layout });
+          const constructed = performance.now();
+          const prose = page.querySelector('.page-prose');
+          // Leave a pixel for rounding at the last line's lower edge.
+          const last = prose.lastElementChild;
+          const heightFits = prose.scrollHeight <= prose.clientHeight;
+          const result = heightFits && (!last || last.getBoundingClientRect().bottom <= prose.getBoundingClientRect().bottom - 1);
+          readerMetric('fit-probe', { page: number, start, end, fits: result, construction: constructed - began,
+            layout: performance.now() - constructed, reads: heightFits && last ? 4 : 2 });
+          return result;
+        };
+        const steps = data.layout ? paginateLayoutSteps(data.layout, { signal }) : paginateTextSteps(text, { signal });
+        fragments = await fitPageSteps(steps, fits, check);
+      } finally { host.remove(); readerMetric('fitting-end', { page: number, aborted: signal.aborted, duration: performance.now() - fittingStarted }); }
+    }
+    check();
+    const characters = fragments.at(-1)?.end || 0;
+    if (characters <= fragmentCharacterBudget) {
+      while (fragmentCache.size >= 6 || fragmentCharacters + characters > fragmentCharacterBudget) {
+        const oldest = fragmentCache.keys().next().value;
+        fragmentCharacters -= fragmentCache.get(oldest).at(-1)?.end || 0;
+        fragmentCache.delete(oldest);
+      }
+      fragmentCache.set(number, fragments); fragmentCharacters += characters;
+      readerMetric('fragment-cache', { pages: fragmentCache.size, characters: fragmentCharacters });
+    }
+    return fragments;
+  };
+  return createBookPager({ count: pageCount(), loadFragments: number => {
+    // A yielded fit may be requested by warmup and a foreground turn together.
+    // Share it so only one owner publishes this page's cache accounting.
+    if (!pending.has(number)) pending.set(number, load(number).finally(() => pending.delete(number)));
+    return pending.get(number);
+  } });
+}
+function createSpreadPreparation(context) {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([context.signal, controller.signal]);
+  const pager = fittedPager({ ...context, signal });
+  return { pager, signal, controller, context, buffer: createSpreadBuffer({ prepare: async anchor => {
+    const spread = await pager.spread(anchor, step());
+    if (signal.aborted || context.renderEpoch !== epoch) throw new DOMException('Reading layout changed.', 'AbortError');
+    const pages = await spreadPages(spread, { ...context, signal });
+    if (signal.aborted || context.renderEpoch !== epoch) throw new DOMException('Reading layout changed.', 'AbortError');
+    return { spread, pages };
+  } }) };
 }
 function readingAnchor() {
   const place = book.bookPosition;
@@ -830,9 +898,11 @@ function commitSpread(spread, pages, place = spread.anchor) {
   $('book-spread').replaceChildren(...pages);
   readerMetric('visible-insertion', { duration: performance.now() - started, page: book.page, offset });
   spreadPreparation?.buffer.remember(spread.anchor, { spread, pages });
+  readerMetric('spread-cache', { entries: spreadPreparation?.buffer.size, nodes: spreadPreparation?.buffer.nodeCount });
   updateReadingPosition();
 }
 async function render() {
+  interruptedRender = false;
   stopReadingRender();
   if (mode === 'book' && hasNoReadableText()) mode = 'original';
   const renderEpoch = ++epoch;
@@ -905,12 +975,7 @@ async function render() {
   }
   $('book-spread').setAttribute('aria-busy', 'true');
   $('book-spread').replaceChildren(paperPage(book.page, 'left'));
-  const pager = fittedPager({ signal, renderEpoch, source });
-  const preparation = { pager, signal, buffer: createSpreadBuffer({ prepare: async anchor => {
-    const spread = await pager.spread(anchor, step());
-    if (signal.aborted || renderEpoch !== epoch) throw new DOMException('Reading layout changed.', 'AbortError');
-    return { spread, pages: await spreadPages(spread, { signal, renderEpoch, source }) };
-  } }) };
+  const preparation = createSpreadPreparation({ signal, renderEpoch, source });
   spreadPreparation = preparation;
   pageFillPromise = (async () => {
     try {
@@ -1050,8 +1115,8 @@ $('text-help-button').addEventListener('click', () => {
 smallScreen.addEventListener('change', () => { flushScrollSave(); render(); });
 window.addEventListener('resize', () => {
   cancelPageTurn();
-  clearTimeout(resizeTimer);
-  if (layout === 'pages' && mode === 'book') resizeTimer = setTimeout(() => { render(); }, 160);
+  clearTimeout(resizeTimer); resizeTimer = null;
+  if (layout === 'pages' && mode === 'book') resizeTimer = setTimeout(() => { resizeTimer = null; render(); }, 160);
 }, { passive: true });
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', cancelPageTurn);
 let swipeStart = null;
@@ -1108,7 +1173,10 @@ document.addEventListener('keydown', event => {
     if (document.body.classList.contains('focus-mode')) toggleFocus();
   }
 });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { cancelPageTurn(); flushScrollSave(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { cancelPageTurn(); flushScrollSave(); }
+  else resumeInterruptedRender();
+});
 window.addEventListener('pagehide', () => { cancelPageTurn(); flushScrollSave(); });
 
 function loadingDialog(controller) {
