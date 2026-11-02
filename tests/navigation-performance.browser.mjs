@@ -1,9 +1,10 @@
 /** Production navigation measurements and input regressions on an isolated origin.
- * node tests/navigation-performance.browser.mjs [metrics|input|work|all] [--baseline]
+ * node tests/navigation-performance.browser.mjs metrics --calibrate=PATH --source-ref=BASELINE
+ * node tests/navigation-performance.browser.mjs [metrics|all] --budget=PATH
+ * node tests/navigation-performance.browser.mjs [input|work] (deterministic gates)
  */
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createServer as tcpServer } from 'node:net';
@@ -11,8 +12,14 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeFidelityPdf } from './fidelity-fixtures.mjs';
 import { makeLayoutPdf } from './pdf-layout-fixture.mjs';
+import { option, provenance, environment, installLongTasks, verifyLongTasks, longTaskSummary, evaluateGate, assertNavigationBounds, NAVIGATION_KEYS } from './performance-gate.mjs';
 
 const baseline = process.argv.includes('--baseline');
+const sourceRef = option('source-ref');
+const calibrationPath = option('calibrate'); const budgetPath = option('budget');
+assert.ok(!calibrationPath || sourceRef, 'Calibration requires an explicit baseline --source-ref=COMMIT');
+assert.ok(!(sourceRef && !calibrationPath), '--source-ref is reserved for baseline calibration');
+const started = new Date().toISOString();
 const selection = process.argv.find(arg => ['metrics', 'input', 'work', 'all'].includes(arg)) || 'all';
 await mkdir('output/playwright/navigation-performance', { recursive: true });
 const run = await mkdtemp('output/playwright/navigation-performance/run-');
@@ -22,9 +29,16 @@ assert.ok(!originalFitting || selection === 'metrics' || selection === 'work' &&
   'Original fitting is available for metrics or diagnostic work baselines');
 const originalModules = originalFitting ? new Map(['book-pagination.js', 'layout-reading.js'].map(file =>
   [path.resolve('src', file).replaceAll('\\', '/'), execFileSync('git', ['show', `7668a92:src/${file}`], { encoding: 'utf8' })])) : new Map();
+if (sourceRef) {
+  assert.ok(!originalFitting && !baseline, 'Calibration cannot use legacy diagnostic mutations');
+  for (const file of execFileSync('git', ['ls-files', 'src'], { encoding: 'utf8' }).trim().split(/\r?\n/)) {
+    originalModules.set(path.resolve(file).replaceAll('\\', '/'), execFileSync('git', ['show', `${sourceRef}:${file}`], { encoding: 'utf8' }));
+  }
+}
 for (const file of ['main.js', 'page-turn.js']) {
   let code = originalFitting && file === 'main.js'
     ? execFileSync('git', ['show', '5263318:src/main.js'], { encoding: 'utf8' }) : await readFile(`src/${file}`, 'utf8');
+  if (sourceRef) code = execFileSync('git', ['show', `${sourceRef}:src/${file}`], { encoding: 'utf8' });
   if (baseline && originalFitting) code = file === 'page-turn.js' ? code.replace('duration = 160', 'duration = 420') : code.replace('.matches || fallback', '.matches');
   originalModules.set(path.resolve('src', file).replaceAll('\\', '/'), code);
 }
@@ -33,7 +47,8 @@ const port = reserve.address().port; await new Promise(resolve => reserve.close(
 const server = await createServer({ cacheDir: `${run}/vite-cache`, plugins: [{ name: 'audit-original-fitting', enforce: 'pre', load: id => originalModules.get(id) }],
   server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const report = { baseline, originalFitting, environment: { platform: os.platform(), release: os.release(), cpu: os.cpus()[0]?.model, cores: os.cpus().length, node: process.version }, metrics: [], input: [], work: [], errors: [] };
+const report = { kind: 'navigation', started, selection, status: 'running', baseline, originalFitting, environment: environment(),
+  provenance: await provenance(['tests/navigation-performance.browser.mjs', 'tests/performance-gate.mjs', 'tests/fidelity-fixtures.mjs', 'tests/pdf-layout-fixture.mjs', 'package-lock.json'], sourceRef), metrics: [], input: [], work: [], errors: [] };
 let context;
 async function settled(page) {
   await page.waitForFunction(() => !document.querySelector('#modal').open && (document.body.classList.contains('scroll-mode')
@@ -101,6 +116,7 @@ async function turnMetric(page) {
   return page.evaluate(() => {
     const events = window.auditEvents;
     const input = events.find(e => e.type === 'turn-input');
+    const animationStart = events.find(e => e.type === 'animation-start');
     const commit = events.find(e => e.type === 'turn-commit');
     const visible = events.find(e => e.type === 'paint-visible');
     const probes = events.filter(e => e.type === 'fit-probe');
@@ -111,6 +127,8 @@ async function turnMetric(page) {
       preparationMs: events.find(e => e.type === 'turn-ready')?.preparation,
       animationMs: events.find(e => e.type === 'turn-animation')?.duration,
       visibleInsertionMs: sum(events.filter(e => e.type === 'visible-insertion'), 'duration'),
+      animationStartMs: animationStart && input ? animationStart.time - input.time : null,
+      longTaskWindow: input && commit ? { start: input.time, end: commit.time } : null,
       visibleMs: visible && input ? visible.time - input.time : null,
       committedMs: commit && input ? commit.time - input.time : null,
       anchor: commit && { page: commit.page, offset: commit.offset } };
@@ -143,10 +161,16 @@ async function metrics(page) {
             const warmup = prepared ? await warm(page) : [];
             const metric = await turnMetric(page);
             assert.ok(metric.anchor, `${name}: no completed turn`);
+            const longTasks = await page.evaluate(() => { window.auditPerformance.drain?.(); return window.auditPerformance.entries; });
+            const idleStart = warmup.find(e => e.type === 'warmup-start')?.time;
+            const idleEnd = warmup.findLast(e => e.type === 'warmup-end')?.time;
+            const idle = longTaskSummary(longTasks, idleStart, idleEnd);
             report.metrics.push({ name, width, textSize, motion, prepared, repeat, warmup,
               idlePreparationMs: warmup.find(e => e.type === 'warmup-end')?.duration || 0,
               idleProbes: warmup.filter(e => e.type === 'fit-probe').length,
-              idleLayoutReads: warmup.filter(e => e.type === 'fit-probe').reduce((n, e) => n + e.reads, 0), ...metric });
+              idleLayoutReads: warmup.filter(e => e.type === 'fit-probe').reduce((n, e) => n + e.reads, 0), ...metric,
+              ...longTaskSummary(longTasks, metric.longTaskWindow.start, metric.longTaskWindow.end),
+              idleLongTaskTotalMs: idle.longTaskTotalMs, idleLongTaskMaxMs: idle.longTaskMaxMs, idleLongTasks: idle.longTasks });
           }
           await page.screenshot({ path: `${run}/${name}-${width}-${textSize}-${motion}-${prepared}.png` });
         }
@@ -155,7 +179,7 @@ async function metrics(page) {
   }
 }
 function distributions(rows) {
-  const keys = ['visibleMs', 'committedMs', 'preparationMs', 'animationMs', 'extractionMs', 'visibleInsertionMs',
+  const keys = ['animationStartMs', 'longTaskCount', 'longTaskTotalMs', 'longTaskMaxMs', 'idleLongTaskTotalMs', 'idleLongTaskMaxMs', 'visibleMs', 'committedMs', 'preparationMs', 'animationMs', 'extractionMs', 'visibleInsertionMs',
     'probes', 'candidateReconstructions', 'layoutReads', 'candidateMs', 'layoutMs', 'idlePreparationMs', 'idleProbes', 'idleLayoutReads'];
   return Object.fromEntries(keys.map(key => {
     const values = rows.map(row => row[key]).filter(Number.isFinite).sort((a, b) => a - b);
@@ -403,6 +427,7 @@ try {
   await server.listen();
   context = await chromium.launchPersistentContext(`${run}/profile`, { channel: 'chrome', headless: true, viewport: { width: 1440, height: 900 } });
   report.environment.browser = context.browser()?.version();
+  await context.addInitScript(installLongTasks);
   await context.addInitScript(() => {
     window.auditEvents = []; window.auditIdle = null;
     window.requestIdleCallback = callback => { window.auditIdle = callback; return 1; };
@@ -442,6 +467,7 @@ try {
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (...args) {
       const animation = animate.apply(this, args);
+      if (this.classList.contains('page-turn-leaf')) window.auditEvents.push({ type: 'animation-start', time: performance.now(), duration: args[1]?.duration });
       if (this.classList.contains('page-turn-leaf') && window.auditHold) {
         animation.pause(); window.auditAnimations.push(animation);
       }
@@ -462,13 +488,43 @@ try {
   await page.evaluate(() => localStorage.setItem('folio:active-book', JSON.stringify('demo')));
   await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.locator('#appearance-button[role="slider"]').waitFor({ timeout: 90000 }); await settled(page);
-  if (selection === 'metrics' || selection === 'all') await metrics(page);
+  report.capabilities = await verifyLongTasks(page);
+  assert.ok(report.capabilities.verified, 'Long Tasks observation unavailable or self-test failed');
+  if (selection === 'metrics' || selection === 'all') {
+    await metrics(page);
+    if (!baseline) {
+      assertNavigationBounds(report.metrics);
+      assert.ok(report.metrics.every(row => row.events.filter(e => e.type === 'animation-start').every(e => e.duration <= 160)),
+        'requested animation duration exceeded the 160ms interaction policy');
+    }
+    if (!baseline) {
+      report.rows = report.metrics;
+      report.gate = await evaluateGate(report, NAVIGATION_KEYS, 64, { calibrationPath, budgetPath });
+      assert.equal(report.gate.status === 'failed', false, JSON.stringify(report.gate.failures));
+    }
+  }
   if (selection === 'input' || selection === 'all') await input(page);
-  if (selection === 'work' || selection === 'all') await work(page);
+  if (selection === 'work' || selection === 'all') {
+    await work(page);
+    if (!baseline) for (const entry of report.work) {
+      const batches = entry.events.filter(e => e.type === 'fit-yield');
+      assert.ok(batches.every(e => e.requests <= 32), 'fitting batch exceeded request bound');
+      assert.ok(batches.every(e => e.duration < 100), 'fitting blocked a task for 100ms');
+      for (const start of entry.events.filter(e => e.type === 'fitting-start' && e.page === 3)) {
+        const timer = entry.events.find(e => e.type === 'fit-timer' && e.page === 3 && e.time >= start.time);
+        if (timer) assert.ok(timer.time - start.time < 100, 'dense fitting starved timer delivery for 100ms');
+      }
+    }
+  }
   assert.deepEqual(report.errors, []);
+  report.status = baseline ? 'baseline-diagnostic' : 'passed';
   console.log(`PASS ${selection}${baseline ? ' baseline diagnostic' : ''}; evidence: ${run}`);
-} catch (error) { report.failure = error.stack; await context?.pages()[0]?.screenshot({ path: `${run}/failure.png` }).catch(() => {}); throw error; }
+} catch (error) { report.status = 'failed'; report.failure = error.stack; await context?.pages()[0]?.screenshot({ path: `${run}/failure.png` }).catch(() => {}); throw error; }
 finally {
+  report.longTasks = await context?.pages()[0]?.evaluate(() => {
+    const state = window.auditPerformance; state?.drain?.();
+    return state && { supported: state.supported, active: state.active, errors: state.errors, entries: state.entries };
+  }).catch(() => null);
   report.distributions = [];
   for (const motion of ['no-preference', 'reduce']) for (const prepared of [false, true]) {
     const rows = report.metrics.filter(row => row.motion === motion && row.prepared === prepared);
