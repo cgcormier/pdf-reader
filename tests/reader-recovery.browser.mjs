@@ -1,6 +1,8 @@
 // Focused reader-opening regressions. Run against the desktop app with
 // `node tests/reader-recovery.browser.mjs`; RECOVERY_ISSUE selects one group.
 import assert from 'node:assert/strict';
+import { waitForAsync } from './browser-wait.mjs';
+import { makeLayoutPdf } from './pdf-layout-fixture.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -243,7 +245,7 @@ async function waitForBookView(page) {
 }
 
 async function waitForPlace(page, id, expected, message) {
-  await page.waitForFunction(async ({ id, expected }) => {
+  await waitForAsync(page, async ({ id, expected }) => {
     const open = indexedDB.open('folio-reading-places', 1);
     const db = await new Promise((resolve, reject) => {
       open.onsuccess = () => resolve(open.result);
@@ -298,7 +300,7 @@ async function testIssue5(page) {
     if (anchor?.page === 1 && anchor.offset > 0) break;
     await page.locator('#next-page').click();
     await waitForBookLayout(page);
-    await page.waitForFunction(async id => {
+    await waitForAsync(page, async id => {
       const open = indexedDB.open('folio-reading-places', 1);
       const db = await new Promise((resolve, reject) => { open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
       const tx = db.transaction('places', 'readonly'); const request = tx.objectStore('places').get(id);
@@ -523,7 +525,37 @@ async function main() {
   await waitForRescanReady(page);
   assert.equal(await page.locator('#structure-tools > button').first().isEnabled(), true, 'cancelled saved-book opening leaves rescan available');
 
-  console.log('Issue #7 passed: completed import and saved-book reopen enable rescan; rescan starts and disables during scanning; failed and cancelled openings preserve access to the current book.');
+  // A valid zero-page tree used to replace the reader with an unrenderable book
+  // and inherit the demo page count. Exercise both new imports and old records.
+  const emptyBytes = makeLayoutPdf([]);
+  const currentId = await activeBookId(page);
+  const currentRecord = await readBookRecord(page, currentId);
+  const currentPlace = await readPlace(page, currentId);
+  const shelfCount = await page.locator('#shelf-count').textContent();
+  await page.locator('#file-input').setInputFiles({ name: 'empty.pdf', mimeType: 'application/pdf', buffer: Buffer.from(emptyBytes) });
+  await page.waitForFunction(() => !document.querySelector('#modal').open && /contains no pages/.test(document.querySelector('#toast').textContent));
+  assert.equal(await page.locator('#shelf-count').textContent(), shelfCount, 'empty import must not create a saved book');
+  assert.equal(await activeBookId(page), currentId, 'empty import replaced current book');
+  await page.evaluate(async bytes => {
+    const request = indexedDB.open('folio-library', 1);
+    const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    try {
+      const tx = db.transaction('books', 'readwrite');
+      tx.objectStore('books').put({ id: 'saved-empty-book', title: 'Saved empty book', filename: 'empty.pdf',
+        bytes: Uint8Array.from(bytes).buffer, page: 1, bookmarks: [], chapters: [], addedAt: Date.now() });
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+    } finally { db.close(); }
+  }, Array.from(emptyBytes));
+  await clickReadFromShelf(page, 'Saved empty book');
+  await page.waitForFunction(() => !document.querySelector('#modal').open && /contains no pages/.test(document.querySelector('#toast').textContent));
+  await waitForTitle(page, 'Folio-Heading-Book');
+  await waitForRescanReady(page);
+  assert.equal(await activeBookId(page), currentId, 'empty reopen replaced current book');
+  assert.deepEqual(await readBookRecord(page, currentId), currentRecord, 'empty open changed current source bytes or book metadata');
+  assert.deepEqual(await readPlace(page, currentId), currentPlace, 'empty open changed current saved place');
+  assert.deepEqual((await readBookRecord(page, 'saved-empty-book')).bytes, Array.from(emptyBytes), 'existing empty source record must be retained');
+
+  console.log('Issue #7 passed: completed import and saved-book reopen enable rescan; rescan starts and disables during scanning; failed, cancelled and zero-page openings preserve the current book, source bytes and saved place.');
 }
 
 try {

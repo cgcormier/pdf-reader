@@ -61,7 +61,6 @@ export async function openPdf(bytes, { onPassword, signal } = {}) {
 
   // PDF.js calls its password callback with (updatePassword, reason).
   if (onPassword) loadingTask.onPassword = onPassword;
-  if (!signal) return loadingTask.promise;
 
   let settled = false;
   const onAbort = () => {
@@ -69,14 +68,20 @@ export async function openPdf(bytes, { onPassword, signal } = {}) {
     settled = true;
     void loadingTask.destroy();
   };
-  signal.addEventListener('abort', onAbort, { once: true });
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     const doc = await withAbort(loadingTask.promise, signal);
     settled = true;
+    // PDF.js accepts an empty page tree, but the reader requires a source page.
+    // Reject before callers save/adopt it, and retain ownership of its cleanup.
+    if (doc.numPages < 1) {
+      await loadingTask.destroy();
+      throw new Error('This PDF contains no pages to read.');
+    }
     return doc;
   } finally {
     settled = true;
-    signal.removeEventListener('abort', onAbort);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 
