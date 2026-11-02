@@ -8,7 +8,7 @@ await mkdir(base, { recursive: true });
 const directory = await mkdtemp(`${base}/compat-`);
 const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
 const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
-const server = await createServer({ cacheDir: `${directory}/vite-cache`, server: { host: '127.0.0.1', port, strictPort: true, hmr: false } });
+const server = await createServer({ cacheDir: `${directory}/vite-cache`, server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null } });
 let browser;
 const reports = [];
 try {

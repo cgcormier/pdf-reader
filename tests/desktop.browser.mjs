@@ -1,6 +1,7 @@
 // Runs the real desktop app in an isolated, disposable shelf.
 // Set FOLIO_EXECUTABLE to exercise an unpacked release instead of development.
 import assert from 'node:assert/strict';
+import { waitForAsync } from './browser-wait.mjs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,7 +45,7 @@ async function spreadAnchor(page) {
 }
 
 async function waitForSavedPlace(page, expected) {
-  await page.waitForFunction(async expected => {
+  await waitForAsync(page, async expected => {
     const id = JSON.parse(localStorage.getItem('folio:active-book'));
     const db = await new Promise((resolve, reject) => {
       const request = indexedDB.open('folio-reading-places');
@@ -115,8 +116,11 @@ try {
   await page.locator('#launch-help').click();
   assert.match(await page.locator('#modal-body').textContent(), /desktop app has its own shelf/);
   await page.locator('#modal-close').click();
-  await mkdir(path.join(root, 'output'), { recursive: true });
-  await page.screenshot({ path: path.join(root, 'output', 'desktop-smoke.png') });
+  const captureRoot = path.join(root, 'output', 'playwright', 'desktop-smoke');
+  await mkdir(captureRoot, { recursive: true });
+  const captures = await mkdtemp(path.join(captureRoot, 'run-'));
+  await page.screenshot({ path: path.join(captures, 'desktop-smoke.png') });
+  console.log(`Desktop screenshot retained: ${captures}`);
 
   await app.close();
   app = null;

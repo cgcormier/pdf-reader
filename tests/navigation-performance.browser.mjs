@@ -4,6 +4,7 @@
  * node tests/navigation-performance.browser.mjs [input|work] (deterministic gates)
  */
 import assert from 'node:assert/strict';
+import { waitForAsync } from './browser-wait.mjs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -48,7 +49,7 @@ const server = await createServer({ cacheDir: `${run}/vite-cache`, plugins: [{ n
   server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const report = { kind: 'navigation', started, selection, status: 'running', baseline, originalFitting, environment: environment(),
-  provenance: await provenance(['tests/navigation-performance.browser.mjs', 'tests/performance-gate.mjs', 'tests/fidelity-fixtures.mjs', 'tests/pdf-layout-fixture.mjs', 'package-lock.json'], sourceRef), metrics: [], input: [], work: [], errors: [] };
+  provenance: await provenance(['tests/navigation-performance.browser.mjs', 'tests/performance-gate.mjs', 'tests/browser-wait.mjs', 'tests/fidelity-fixtures.mjs', 'tests/pdf-layout-fixture.mjs', 'package-lock.json'], sourceRef), metrics: [], input: [], work: [], errors: [] };
 let context;
 async function settled(page) {
   await page.waitForFunction(() => !document.querySelector('#modal').open && (document.body.classList.contains('scroll-mode')
@@ -72,7 +73,7 @@ async function reloadBook(page) {
 }
 async function importPdf(page, name, bytes) {
   await page.locator('#file-input').setInputFiles({ name: `${name}.pdf`, mimeType: 'application/pdf', buffer: bytes });
-  await page.waitForFunction(async filename => {
+  await waitForAsync(page, async filename => {
     const { getBook } = await import('/src/storage.js');
     const id = JSON.parse(localStorage.getItem('folio:active-book'));
     if (!id || id === 'demo') return false;

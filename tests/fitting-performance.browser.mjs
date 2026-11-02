@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { createServer as tcpServer } from 'node:net';
 import { option, provenance, environment, installLongTasks, verifyLongTasks, evaluateGate, FITTING_KEYS } from './performance-gate.mjs';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
@@ -21,8 +22,12 @@ const modules = new Map();
 if (sourceRef) for (const file of execFileSync('git', ['ls-files', 'src'], { encoding: 'utf8' }).trim().split(/\r?\n/)) {
   modules.set(path.resolve(file).replaceAll('\\', '/'), execFileSync('git', ['show', `${sourceRef}:${file}`], { encoding: 'utf8' }));
 }
+const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
+const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
 const server = await createServer({ root, plugins: [{ name: 'frozen-baseline', enforce: 'pre', load: id => modules.get(id) }], cacheDir: path.join(directory, 'vite-cache'),
-  server: { host: '127.0.0.1', port: 0, hmr: false }, clearScreen: false });
+  // Source is frozen during measurements; recursively watching retained output
+  // adds unrelated work and can stall bootstrap in a large audit workspace.
+  server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 const errors = []; const report = { kind: 'fitting', started, baseline, status: 'failed', cases: [], errors, environment: environment(),
   provenance: await provenance(['tests/fitting-performance.browser.mjs', 'tests/performance-gate.mjs', 'package-lock.json'], sourceRef) };
 let browser; let page; let repeat = 0;

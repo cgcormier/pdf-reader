@@ -1,6 +1,7 @@
 ﻿// Scan fallback regressions for image-only and mixed text/image PDFs.
 // Run with `node tests/create-fixtures.mjs` then `node tests/scan-fallback.browser.mjs`.
 import assert from 'node:assert/strict';
+import { waitForAsync } from './browser-wait.mjs';
 import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,7 +110,7 @@ async function canvasWithPixels(page, selector) {
 }
 
 async function waitForSavedPlace(page, expected) {
-  await page.waitForFunction(async expected => {
+  await waitForAsync(page, async expected => {
     const id = JSON.parse(localStorage.getItem('folio:active-book'));
     const open = indexedDB.open('folio-reading-places');
     const db = await new Promise((resolve, reject) => {
@@ -159,7 +160,7 @@ async function forceLegacyBookPlace(page) {
 }
 
 async function waitForSavedCurrentStructure(page, title) {
-  return page.waitForFunction(async ({ title, expectedVersion }) => {
+  return waitForAsync(page, async ({ title, expectedVersion }) => {
     const openDb = name => new Promise((resolve, reject) => {
       const request = indexedDB.open(name);
       request.onsuccess = () => resolve(request.result);
@@ -268,8 +269,10 @@ async function openBookFromShelf(page, title) {
 async function main() {
   let page = await launch();
   debugPage = page;
-  const screenshots = path.join(root, 'output', 'playwright', 'recovery');
-  await mkdir(screenshots, { recursive: true });
+  const captureRoot = path.join(root, 'output', 'playwright', 'recovery');
+  await mkdir(captureRoot, { recursive: true });
+  const screenshots = await mkdtemp(path.join(captureRoot, 'run-'));
+  console.log(`Scan screenshots retained: ${screenshots}`);
 
   await page.locator('#file-input').setInputFiles(path.join(root, 'output', 'playwright', 'Folio-Scanned-Book.pdf'));
   await waitForTitle(page, 'Folio-Scanned-Book');
