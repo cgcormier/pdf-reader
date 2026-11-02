@@ -1,5 +1,9 @@
 # Page flip optimization
 
+Historical October 23 snapshot. The current reader requests a 160 ms turn; see
+the [October audit handoff](october-audit-handoff.md) for current checks and budgets.
+The 420 ms measurements below describe the earlier implementation.
+
 Implemented locally on branch `optimization`, October 23, 2026. The existing
 JavaScript/browser layout stack and 420 ms 3D turn are retained. No dependency,
 PDF layout schema, database version, or saved-position format changes.

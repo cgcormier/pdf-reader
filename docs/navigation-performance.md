@@ -1,5 +1,9 @@
 # Navigation and fitting audit, batch four
 
+The measurements below are historical #18-#20 evidence. The current calibrated
+#23 gate, Long Tasks capability, enforceable budgets and reproduction commands
+are in [the October audit handoff](october-audit-handoff.md).
+
 Scope: [tracker #3 item 4](https://github.com/cgcormier/pdf-reader/issues/3),
 [#18](https://github.com/cgcormier/pdf-reader/issues/18),
 [#19](https://github.com/cgcormier/pdf-reader/issues/19), and
