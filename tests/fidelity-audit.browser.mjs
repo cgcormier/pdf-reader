@@ -2,25 +2,33 @@
  * node tests/fidelity-audit.browser.mjs [14|15|16|17|all]
  */
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { captureReader } from './reader-capture.mjs';
+import { waitForAsync } from './browser-wait.mjs';
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
+import { createServer as tcpServer } from 'node:net';
 import { makeEmphasisPdf, makeSpeechPdf, makeOcrPdf, makeTailPdf, makeMeasuredTailPdf, tailLengths } from './fidelity-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const args = process.argv.slice(2).map(value => value.replace(/^#/, ''));
+const real = process.argv.includes('--real');
+const args = process.argv.slice(2).filter(v => v !== '--real').map(value => value.replace(/^#/, ''));
 const selected = !args.length || args.includes('all') ? ['14', '15', '16', '17'] : args;
 assert.ok(selected.every(issue => ['14', '15', '16', '17'].includes(issue)), 'Supported issues: 14, 15, 16, 17, all');
 const artifacts = path.join(root, 'output', 'playwright', 'reader-fidelity');
 await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
+const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
+const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
 const server = await createServer({ root, cacheDir: path.join(runDirectory, 'vite-cache'),
-  server: { host: '127.0.0.1', port: 0, hmr: false }, clearScreen: false });
+  // Fixed test inputs do not need a watcher over retained reports/profiles.
+  server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 let context;
-const report = []; const errors = []; const evidence = []; const failures = [];
+const report = []; const errors = []; const evidence = []; const failures = []; const requests = [];
+let incomplete = false;
 const baseline17 = process.env.FOLIO_FIDELITY_BASELINE === '1';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const compact = text => text.replace(/\s+/g, ' ').trim();
@@ -42,17 +50,20 @@ async function settled(page) {
 async function importPdf(page, name, bytes) {
   await writeFile(path.join(runDirectory, name), bytes);
   await page.locator('#file-input').setInputFiles({ name, mimeType: 'application/pdf', buffer: Buffer.from(bytes) });
+  // A fresh Vite origin took 28.5s just to serve PDF.js and its worker. Keep
+  // import setup bounded like the compatibility runner, outside timing gates.
   await page.waitForFunction(() => !document.querySelector('#modal').open
-    && document.querySelector('#book-type')?.textContent === 'FROM YOUR SHELF');
-  await page.waitForFunction(async filename => {
+    && document.querySelector('#book-type')?.textContent === 'FROM YOUR SHELF', null, { timeout:90_000 });
+  await waitForAsync(page, async filename => {
     const { getBook } = await import('/src/storage.js');
     const book = await getBook(JSON.parse(localStorage.getItem('folio:active-book')));
     return book?.filename === filename && book.structure?.status === 'complete';
-  }, name, { timeout: 60_000 });
+  }, name, { timeout: 60_000, label:`completed scan for ${name}` });
   await settled(page);
 }
 async function capture(page, issue, label) {
-  await page.screenshot({ path: path.join(runDirectory, `issue-${issue}-${label}.png`), fullPage: true });
+  if (label.includes('failure') || await page.locator('#modal').evaluate(n => n.open)) await page.screenshot({ path:path.join(runDirectory, `issue-${issue}-${label}.png`), fullPage:false });
+  else await captureReader(page, path.join(runDirectory, `issue-${issue}-${label}.png`));
 }
 async function size(page, viewport, value) {
   await page.setViewportSize(viewport); await pause(250);
@@ -95,10 +106,16 @@ function conserved(entries) {
   }
 }
 async function snapshot(page, scrollPage) {
-  return page.evaluate(number => {
-    const selector = document.body.classList.contains('scroll-mode')
-      ? `.scroll-page[data-source-page="${number}"]` : '#book-spread > .paper-page';
-    return [...document.querySelectorAll(selector)].map(leaf => {
+  // Read readiness and the ranges in one browser task. A later scan/resize
+  // render must not turn an empty paper shell into an accepted source fragment.
+  return waitForAsync(page, number => {
+    const scroll = document.body.classList.contains('scroll-mode');
+    const stage = document.querySelector(scroll ? '#scroll-stage' : '#book-spread');
+    if (stage.getAttribute('aria-busy') === 'true' || scroll && stage.dataset.activeLoads !== '0') return false;
+    const selector = scroll ? `.scroll-page[data-source-page="${number}"]` : '#book-spread > .paper-page:not(.end-page)';
+    const leaves = [...document.querySelectorAll(selector)];
+    if (!leaves.length || leaves.some(leaf => !leaf.querySelector('.layout-block, canvas'))) return false;
+    return leaves.map(leaf => {
       const prose = leaf.querySelector('.page-prose');
       if (!prose) return { page: Number(leaf.dataset.sourcePage), start: 0, end: 0, blocks: [] };
       const bounds = prose.getBoundingClientRect();
@@ -125,7 +142,7 @@ async function snapshot(page, scrollPage) {
               x: line.getBoundingClientRect().left, top: line.getBoundingClientRect().top, height: line.getBoundingClientRect().height })) };
         }) };
     });
-  }, scrollPage);
+  }, scrollPage, { label:'atomic rendered source snapshot' });
 }
 function checkRendered(leaves, entries, { emphasis = false, readingSize, fitted = true } = {}) {
   for (const leaf of leaves) {
@@ -205,7 +222,8 @@ async function emphasis(page) {
 async function walkSource(page, entry) {
   await jump(page, entry.number); const leaves = [];
   for (let turn = 0; turn < 60; turn++) {
-    const spread = await snapshot(page); checkRendered(spread, [entry]);
+    const spread = await snapshot(page);
+    checkRendered(spread, [entry]);
     leaves.push(...spread.filter(leaf => leaf.page === entry.number));
     if (leaves.at(-1)?.end === entry.model.projection.text.length) break;
     assert.ok(!await page.locator('#next-page').isDisabled(), 'source text became unreachable');
@@ -488,7 +506,9 @@ async function tails(page) {
     }
     await capture(page, '17', `${label}-mixed-scroll-${viewport.width}-${readingSize}`);
   }
-  const nietzschePath = process.env.FOLIO_NIETZSCHE_PDF || 'C:/Users/ccorm/Downloads/Additional reading Nietzsche Zarathustra Prologue.pdf';
+  if (real) {
+  const nietzschePath = process.env.FOLIO_NIETZSCHE_PDF;
+  assert.ok(nietzschePath, 'Required real corpus unavailable: set FOLIO_NIETZSCHE_PDF');
   await page.locator('#pages-layout').click(); await size(page, { width: 1440, height: 900 }, 13);
   const nietzsche = await readFile(nietzschePath); await importPdf(page, 'Nietzsche source regression.pdf', nietzsche);
   const [entry] = await models(page, [3]); conserved([entry]); const result = await measure(page, entry);
@@ -504,12 +524,17 @@ async function tails(page) {
     return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', book.bytes))).map(byte => byte.toString(16).padStart(2, '0')).join('');
   });
   assert.equal(digest, createHash('sha256').update(nietzsche).digest('hex'), 'Nietzsche source PDF bytes changed');
+  }
   report.push(baseline17
-    ? 'BASELINE #17 diagnostic only: exact48/65/74 greedy terminal tails, real Nietzsche page3 after14-16, measured fits and source coverage captured; improvement acceptance was intentionally not evaluated.'
-    : 'PASS #17: exact48/65/74 greedy terminal tails (including bold italic) and real Nietzsche page3 at1440x90013px improve below25% final-pair share, both final leaves measured to fit, actual production/helper boundaries match, contiguous source coverage, blank/image/verse pages, forward/back symmetry, bookmark/resize/font/reload/source-jump anchors, desktop/narrow13/19px Pages/Scroll, original PDF bytes preserved.');
+    ? 'BASELINE #17 diagnostic only: exact48/65/74 greedy terminal tails, optional real Nietzsche page3 after14-16, measured fits and source coverage captured; improvement acceptance was intentionally not evaluated.'
+    : 'PASS #17: exact48/65/74 greedy terminal tails (including bold italic) and optional real Nietzsche page3 at1440x90013px improve below25% final-pair share, both final leaves measured to fit, actual production/helper boundaries match, contiguous source coverage, blank/image/verse pages, forward/back symmetry, bookmark/resize/font/reload/source-jump anchors, desktop/narrow13/19px Pages/Scroll, original PDF bytes preserved.');
 }
 
 try {
+  if (real) {
+    try { assert.ok(process.env.FOLIO_NIETZSCHE_PDF); await access(process.env.FOLIO_NIETZSCHE_PDF); }
+    catch { incomplete = true; throw new Error('Required real corpus unavailable: set FOLIO_NIETZSCHE_PDF'); }
+  }
   await server.listen(); const address = server.httpServer.address();
   assert.ok(typeof address === 'object' && address.port !== 4173, 'must use isolated origin');
   context = await chromium.launchPersistentContext(path.join(runDirectory, 'profile'), {
@@ -517,8 +542,33 @@ try {
     viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce',
   });
   for (const issue of selected) {
-    const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+    const page = await context.newPage(); page.setDefaultTimeout(30000); page.setDefaultNavigationTimeout(60000);
+    page.on('request', request => requests.push({ event:'request', url:request.url(), time:Date.now() }));
+    page.on('requestfinished', request => requests.push({ event:'finished', url:request.url(), time:Date.now() }));
+    page.on('requestfailed', request => requests.push({ event:'failed', url:request.url(), failure:request.failure(), time:Date.now() }));
+    page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/tests/fidelity-check.html`, { waitUntil: 'domcontentloaded' });
+    if (issue === selected[0]) {
+      await page.evaluate(() => { window.asyncWaitChecks = 0; });
+      assert.equal(await waitForAsync(page, async () => ++window.asyncWaitChecks >= 3), true);
+      assert.equal(await page.evaluate(() => window.asyncWaitChecks), 3, 'async false must be retried');
+      await assert.rejects(() => waitForAsync(page, async () => false, undefined, { timeout:150 }), /timed out/i);
+      const empty = await waitForAsync(page, async () => {
+        const { openPdf } = await import('/src/pdf-engine.js');
+        const { makeLayoutPdf } = await import('/tests/pdf-layout-fixture.mjs');
+        const bytes = makeLayoutPdf([]);
+        const original = Array.from(bytes);
+        try {
+          const pdf = await openPdf(bytes.buffer);
+          await pdf.loadingTask.destroy();
+          return { rejected:false };
+        } catch (error) { return { rejected:true, message:error.message,
+          bytesUnchanged:bytes.byteLength === original.length && original.every((value, index) => bytes[index] === value) }; }
+      }, undefined, { timeout:90_000 });
+      assert.equal(empty.rejected, true, 'no-signal open must reject a zero-page document');
+      assert.match(empty.message, /contains no pages/);
+      assert.equal(empty.bytesUnchanged, true);
+    }
     await page.evaluate(() => localStorage.setItem('folio:active-book', JSON.stringify('demo')));
     await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.querySelector('#appearance-button')?.hasAttribute('aria-valuenow')
@@ -540,9 +590,9 @@ try {
   if (!failures.length) failures.push({ issue: 'setup-or-renderer', message: error.message, stack: error.stack });
   throw error;
 } finally {
-  await writeFile(path.join(runDirectory, 'report.json'), JSON.stringify({ issues: selected, baseline17,
-    status: failures.length || errors.length || report.length !== selected.length
+  await writeFile(path.join(runDirectory, 'report.json'), JSON.stringify({ issues: selected, baseline17, matrix:real ? 'core-and-real' : 'portable-core',
+    status: incomplete ? 'incomplete' : failures.length || errors.length || report.length !== selected.length
       ? 'failed' : baseline17 && selected.includes('17') ? 'baseline-diagnostic' : 'passed',
-    report, errors, failures, evidence }, null, 2));
+    report, errors, failures, evidence, requests }, null, 2));
   await context?.close(); await server.close();
 }

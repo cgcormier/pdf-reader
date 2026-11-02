@@ -1,5 +1,5 @@
 /** Original synthetic book; exercises the real PDF.js parser without downloads. */
-export function makeStructurePdf({ outline = true, pages = 132 } = {}) {
+export function makeStructurePdf({ outline = true, pages = 132, scanned = false } = {}) {
   const objects = [];
   const add = text => { objects.push(text); return objects.length; };
   const escape = text => text.replace(/[\\()]/g, '\\$&');
@@ -27,6 +27,7 @@ export function makeStructurePdf({ outline = true, pages = 132 } = {}) {
     if (number === 132) text('Appendix A: Notes', 50, 720, 22);
     for (let i = 0; i < 8; i++) text(`This is original example prose on source page ${number}, line ${i + 1}.`, 50, (number === 2 ? 450 : 570) - i * 26);
     text(String(number > 2 ? number - 2 : number), 290, 25, 9);
+    if (scanned) content.splice(0, content.length, '0.2 0.4 0.6 rg 50 100 500 600 re f');
     const stream = content.join('\n');
     add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 3 0 R >> >> /Contents ${6 + (number - 1) * 2} 0 R >>`);
     add(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);

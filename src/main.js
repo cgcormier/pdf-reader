@@ -259,8 +259,14 @@ function structureStatus() {
   if (structure.status === 'cancelled') return `Scan stopped · ${scanned} of ${pageCount()} pages checked. Resume whenever you like.`;
   if (structure.status === 'error') return `Scan paused after ${scanned} pages. Your reading place is kept.`;
   if (structure.status !== 'complete') return 'Contents from your PDF. Checking for additional parts and sections.';
-  if (!structure.textPages && !structure.nodes.some(node => node.source === 'outline')) return 'No readable headings found. Use Original PDF.';
-  return `${scanned} of ${pageCount()} pages checked${failures ? ` · ${failures} unreadable` : ''}.`;
+  const progress = `${scanned} of ${pageCount()} pages checked${failures ? ` · ${failures} unreadable` : ''}.`;
+  const text = structure.textPages > 0
+    ? `Readable text found on ${structure.textPages} pages.`
+    : 'No readable page text found. Use Original PDF.';
+  const outline = structure.nodes.some(node => node.source === 'outline');
+  const navigation = outline ? 'PDF outline navigation is available.'
+    : structure.pageNavigation?.length ? 'PDF page bookmarks are available.' : 'Use the PDF page number to navigate.';
+  return `${progress} ${text} ${navigation}`;
 }
 function updateStructureTools() {
   let tools = $('structure-tools');
@@ -431,8 +437,10 @@ function updateControls() {
   $('progress-slider').style.setProperty('--progress', `${percent}%`);
   $('progress-text').textContent = percent === 0 ? 'The beginning of something good.' : percent === 100 ? 'A good place to pause.' : 'One page at a time.';
   $('previous-page').disabled = mode === 'book' && layout === 'pages' ? !fitted || !turnController && (fitted.anchor.page === 1 && fitted.anchor.offset === 0) : navigation.previous === null;
-  $('previous-page').setAttribute('aria-label', step() === 2 ? 'Previous two pages' : 'Previous page');
-  $('next-page').setAttribute('aria-label', step() === 2 ? 'Next two pages' : 'Next page');
+  const navigationUnit = mode === 'book' && layout === 'pages'
+    ? smallScreen.matches ? 'leaf' : 'spread' : 'PDF page';
+  $('previous-page').setAttribute('aria-label', `Previous ${navigationUnit}`);
+  $('next-page').setAttribute('aria-label', `Next ${navigationUnit}`);
   $('next-page').disabled = mode === 'book' && layout === 'pages' ? !fitted || !turnController && fitted.next === null : navigation.next === null;
   const bookmarked = book.bookmarks.includes(book.page);
   $('bookmark-button').classList.toggle('is-bookmarked', bookmarked);

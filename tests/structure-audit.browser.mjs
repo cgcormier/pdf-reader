@@ -4,6 +4,7 @@
  * Owns a fresh retained Chrome profile and an available loopback Vite origin.
  */
 import assert from 'node:assert/strict';
+import { captureReader } from './reader-capture.mjs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +24,7 @@ await mkdir(artifacts, { recursive: true });
 const runDirectory = await mkdtemp(path.join(artifacts, 'run-'));
 const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
 const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
-const server = await createServer({ root, cacheDir: path.join(runDirectory, 'vite-cache'), server: { host: '127.0.0.1', port, strictPort: true, hmr: false }, clearScreen: false });
+const server = await createServer({ root, cacheDir: path.join(runDirectory, 'vite-cache'), server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 let context;
 const report = [];
 const errors = [];
@@ -62,7 +63,8 @@ async function settled(page) {
 }
 
 async function capture(page, issue, label) {
-  await page.screenshot({ path: path.join(runDirectory, `issue-${issue}-${label}.png`), fullPage: true });
+  if (label.includes('failure') || await page.locator('#modal').evaluate(n => n.open)) await page.screenshot({ path:path.join(runDirectory, `issue-${issue}-${label}.png`), fullPage:false });
+  else await captureReader(page, path.join(runDirectory, `issue-${issue}-${label}.png`));
 }
 
 async function scannerBookmarks(page) {
