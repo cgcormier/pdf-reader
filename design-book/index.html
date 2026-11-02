@@ -319,7 +319,7 @@
       let body = `<header class="reader-head">${wordmark}<span class="reader-motto">A quiet place for your PDFs</span><span class="reader-head-spacer"></span><button class="reader-head-button">My shelf <span class="count">2</span></button><button class="reader-head-button primary">Open a PDF</button></header><div class="reader-layout">${sidebar(false,active)}<main class="reader-main">${toolbar()}<div class="mobile-toolbar-row"><button>${icons.contents} &nbsp; Contents</button><span>The Art of Noticing</span><button>1 / 8</button></div><span class="content-open-label">Tap Contents to close</span>${screen.type === "controls" ? toolbarPopover() : ""}${mainContent}<div class="reader-foot"><div class="page-progress"><span>1</span><input type="range" min="1" max="8" value="1" aria-label="Page progress"><span>8</span></div><div class="reader-hint"><span>← Previous</span><span>Page 1 of 8</span><span>Next →</span></div><span>Saved in this browser</span></div></main></div>${overlay(screen.type,`${screen.n}-${viewport}`)}${appearanceDialogIf(screen.type)}`;
       if (start) body = publicHome();
       const svg = annotated ? annotationMarkup(screen,viewport,screen.n) : "";
-      return `<div class="viewport-frame ${viewport}"><div class="artboard-wrap ${viewport}"><div class="${cls}" data-viewport="${viewport}" aria-label="${screen.title} ${viewport} interface mockup">${body}${svg}</div></div></div>`;
+      return `<div class="viewport-frame ${viewport}"${mobile ? ' hidden' : ''}><div class="artboard-wrap ${viewport}"><div class="${cls}" data-viewport="${viewport}" aria-label="${screen.title} ${viewport} interface mockup">${body}${svg}</div></div></div>`;
     }
     function appearanceDialogIf(type) { return type === "appearance" ? appearanceDialog() : ""; }
     const gallery = document.getElementById("screen-gallery-content");
@@ -358,7 +358,6 @@
         const button=sheet.querySelector(`[data-annotation-choice="${on?"annotated":"clean"}"]`); button.click();
       });
     });
-    window.addEventListener("beforeprint",()=>document.querySelectorAll(".screen-sheet").forEach(sheet=>sheet.querySelectorAll(".viewport-frame").forEach(frame=>frame.hidden=false)));
   })();
   </script>
 </body>
