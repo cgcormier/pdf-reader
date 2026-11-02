@@ -69,7 +69,9 @@ document.querySelector('#run').onclick = async () => {
       const artwork = doc.querySelector('.shelf-art').getBoundingClientRect();
       assert(Math.abs(artwork.width / artwork.height - 144 / 54) < .01, 'Shelf illustration is stretched');
       const stand = doc.querySelector('.shelf-stand').getBoundingClientRect();
-      assert(Math.abs(stand.width / stand.height - 12) < .01, 'Shelf board is stretched');
+      // A short SVG amplifies subpixel layout rounding when dividing by its
+      // height. Compare dimensions so the .7px mobile scale remains valid.
+      assert(Math.abs(stand.width / 12 - stand.height) < .05, 'Shelf board is stretched');
       const shelfHit = doc.elementFromPoint(artwork.right - 3, artwork.bottom - 5);
       assert(shelfHit === label, 'Clicking the shelf board must open the library');
       assert(shelf.top >= header.top && shelf.bottom <= header.bottom, 'Shelf exceeds header');

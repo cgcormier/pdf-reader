@@ -12,13 +12,20 @@ export async function verifyShelfShortcut(tab) {
   for (const spine of await tab.playwright.locator('button.shelf-spine').all()) {
     await spine.press('Tab');
     await tab.pressKey(null, 'shift+Tab');
-    const feedback = await spine.evaluate(node => ({
+    const feedback = await spine.evaluate(async node => {
+      // Keyboard focus can arrive before the tooltip's visibility transition
+      // starts. Poll the expected state, with a bound for a genuinely hidden tip.
+      const deadline = performance.now() + 1000;
+      while (getComputedStyle(node.querySelector('[role="tooltip"]')).visibility !== 'visible'
+        && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+      return {
       focused: document.activeElement === node,
       title: node.querySelector('[role="tooltip"]').textContent,
       label: node.getAttribute('aria-label'),
       description: node.getAttribute('aria-describedby') === node.querySelector('[role="tooltip"]').id,
       visible: getComputedStyle(node.querySelector('[role="tooltip"]')).visibility === 'visible',
-    }));
+      };
+    });
     if (!feedback.focused || !feedback.visible || !feedback.description || feedback.label !== `Read ${feedback.title}`) {
       throw new Error('A book does not expose its title on keyboard focus');
     }

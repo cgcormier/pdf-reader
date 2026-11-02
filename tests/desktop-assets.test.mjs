@@ -49,18 +49,31 @@ test('desktop rejects other origins, credentials, ports, malformed paths and wri
   assert.equal(write.headers.get('allow'), 'GET, HEAD');
 });
 
-test('desktop handles HEAD and refuses directories or symlinks outside bundled assets', async t => {
+test('desktop handles HEAD and refuses directories', async () => {
   const head = await assetResponse(new Request(APP_URL, { method: 'HEAD' }), dist);
   assert.equal(head.status, 200);
   assert.equal(await head.text(), '');
   assert.ok(Number(head.headers.get('content-length')) > 0);
   await mkdir(path.join(dist, 'directory'));
   assert.equal((await assetResponse(new Request(`${APP_URL}directory`), dist)).status, 404);
+});
+
+test('desktop refuses file symlinks outside bundled assets', async t => {
   try {
     await symlink(path.join(root, 'private.txt'), path.join(dist, 'link.txt'));
   } catch (error) {
-    if (error.code === 'EPERM') { t.diagnostic('Symlink check unavailable without Windows symlink permission'); return; }
+    if (error.code === 'EPERM') { t.skip('File symlink creation unavailable without Windows symlink permission'); return; }
     throw error;
   }
   assert.equal((await assetResponse(new Request(`${APP_URL}link.txt`), dist)).status, 404);
+});
+
+test('desktop refuses directory links outside bundled assets', async () => {
+  const outside = path.join(root, 'outside');
+  await mkdir(outside);
+  await writeFile(path.join(outside, 'fixture.txt'), 'outside bundled assets');
+  // Windows junctions exercise realpath containment without requiring the
+  // optional file-symlink privilege. Both ends are owned by this temp fixture.
+  await symlink(outside, path.join(dist, 'linked-directory'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal((await assetResponse(new Request(`${APP_URL}linked-directory/fixture.txt`), dist)).status, 404);
 });
