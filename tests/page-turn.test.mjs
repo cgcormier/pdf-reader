@@ -115,7 +115,7 @@ test('forward desktop turn hinges from the left with current-right front and nex
   assert.equal(findClass(layer, 'page-turn-back').children[0].className, 'paper-page next-left page-turn-page');
   assert.ok(f.stage.children[1].classList.contains('turn-origin'));
   assert.deepEqual(f.animations[0].keyframes, [{ transform: 'rotateY(0deg)' }, { transform: 'rotateY(-180deg)' }]);
-  assert.equal(f.animations[0].options.duration, 160, 'responsive normal turn duration');
+  assert.equal(f.animations[0].options.duration, 350, 'default turn duration');
   const movingProse = findClass(findClass(layer, 'page-turn-front'), 'page-prose');
   assert.equal(movingProse.scrollTop, 27);
   assert.equal(findClass(layer, 'page-turn-front').children[0], f.currentRight);
@@ -163,13 +163,17 @@ test('single-page turn uses a centered card and cleans up on abort without commi
   assert.equal(onePageStage.classList.contains('is-turning'), false);
 });
 
-test('pre-aborted and reduced-motion turns create no overlay', async () => {
+test('pre-aborted, reduced-motion, and instant turns create no overlay', async () => {
   const aborted = fixture();
   const controller = new AbortController();
   controller.abort();
   assert.equal(await turnPages({ stage: aborted.stage, targetPages: [aborted.nextLeft, aborted.nextRight], direction: 'forward', signal: controller.signal }), 'cancelled');
   const reduced = fixture();
   assert.equal(await turnPages({ stage: reduced.stage, targetPages: [reduced.nextLeft, reduced.nextRight], direction: 'forward', reducedMotion: true }), 'finished');
+  const instant = fixture();
+  assert.equal(await turnPages({ stage: instant.stage, targetPages: [instant.nextLeft, instant.nextRight], direction: 'forward', duration: 0 }), 'finished');
+  assert.equal(instant.animations.length, 0);
+  assert.equal(instant.stage.children.length, 2);
   assert.equal(aborted.stage.children.length, 2);
   assert.equal(reduced.stage.children.length, 2);
 });

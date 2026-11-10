@@ -37,6 +37,7 @@ const commands = [
   ['tests/reader-compat.browser.mjs'], ['tests/desktop.browser.mjs'],
   ['tests/fidelity-desktop.browser.mjs', ...(real ? ['--real'] : [])],
   ['tests/bookmark-persistence.browser.mjs'],
+  ['tests/page-turn-speed.browser.mjs'],
   ['tests/offline.browser.mjs'],
 ];
 console.log(`Audit evidence: ${run}`);

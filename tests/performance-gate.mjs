@@ -10,7 +10,9 @@ export const POLICY = Object.freeze({ version: 1, factor: 1.5, allowanceMs: 40, 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 export const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 export async function provenance(files, sourceRef) {
-  const sourceFiles = execFileSync('git', ['ls-files', 'src'], { encoding: 'utf8' }).trim().split(/\r?\n/);
+  const listSource = sourceRef ? ['ls-tree', '-r', '--name-only', sourceRef, '--', 'src']
+    : ['ls-files', '--cached', '--others', '--exclude-standard', '--', 'src'];
+  const sourceFiles = execFileSync('git', listSource, { encoding: 'utf8' }).trim().split(/\r?\n/).sort();
   const source = [];
   for (const file of sourceFiles) source.push([file, hash(sourceRef ? execFileSync('git', ['show', `${sourceRef}:${file}`]) : await readFile(file))]);
   const runner = [];

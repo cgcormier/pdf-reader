@@ -6,6 +6,7 @@ import { demo } from './demo.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
 import { turnPages } from './page-turn.js';
+import { attachPageTurnSpeed } from './page-turn-speed.js';
 import { FIT_CACHE_LIMIT, paginateTextSteps, createBookPager } from './book-pagination.js';
 import { createSpreadBuffer } from './spread-buffer.js';
 import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
@@ -18,6 +19,8 @@ function readerMetric(type, detail = {}) {
   if (typeof window.__folioReaderMetric === 'function') window.__folioReaderMetric({ type, time: performance.now(), ...detail });
 }
 const smallScreen = matchMedia('(max-width: 820px)');
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const pageTurnSpeed = attachPageTurnSpeed(reducedMotion);
 let book = structuredClone(demo);
 let pdf = null;
 let mode = 'book';
@@ -468,6 +471,7 @@ function updateControls() {
   });
   $('pages-layout').textContent = mode === 'book' ? 'Page flip' : 'Pages';
   $('pages-layout').title = mode === 'book' ? 'Smooth book page turns (S)' : 'One original PDF page at a time (S)';
+  pageTurnSpeed.setAvailable(mode === 'book' && layout === 'pages');
   const flipHint = smallScreen.matches ? 'Swipe or ← → to flip · S to scroll' : '← → to flip · S to scroll';
   $('navigation-hint').textContent = layout === 'scroll' ? 'Scroll at your own pace · S to flip' : mode === 'book' ? flipHint : '← → for pages · S to scroll';
   $('save-status').textContent = saved ? 'Your place is kept, automatically.' : 'Reading now. Local saving is unavailable.';
@@ -1031,6 +1035,8 @@ async function flipTo(direction) {
   turnController = controller;
   const renderEpoch = epoch;
   const started = performance.now();
+  // A change during spread preparation applies to the next turn.
+  const duration = pageTurnSpeed.duration;
   readerMetric('turn-start', { direction });
   const fromAnchor = fittedSpread.anchor;
   const stage = $('book-spread');
@@ -1052,7 +1058,7 @@ async function flipTo(direction) {
     const fallback = fallbackOnly(fittedSpread) && fallbackOnly(spread);
     readerMetric('turn-ready', { preparation: animationStarted - started, page: spread.anchor.page, offset: spread.anchor.offset, fallback });
     const result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
-      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches || fallback });
+      reducedMotion: reducedMotion.matches || fallback, duration });
     readerMetric('turn-animation', { duration: performance.now() - animationStarted, result });
     if (result !== 'finished' || controller.signal.aborted || renderEpoch !== epoch) return;
     // Only a completed turn changes the book or its saved source-page anchor.
@@ -1135,7 +1141,7 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer); resizeTimer = null;
   if (layout === 'pages' && mode === 'book') resizeTimer = setTimeout(() => { resizeTimer = null; render(); }, 160);
 }, { passive: true });
-matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', cancelPageTurn);
+reducedMotion.addEventListener('change', cancelPageTurn);
 let swipeStart = null;
 $('book-spread').addEventListener('pointerdown', event => {
   if (layout !== 'pages' || mode !== 'book' || !['touch', 'pen'].includes(event.pointerType) || event.target.closest('button, input, a')) return;
@@ -1197,7 +1203,8 @@ $('contents-toggle').addEventListener('click', () => {
   $('contents-toggle').setAttribute('aria-expanded', String(open));
 });
 document.addEventListener('keydown', event => {
-  if ($('modal').open || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.defaultPrevented || $('page-turn-speed-panel').contains(event.target) || $('modal').open
+    || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.ctrlKey || event.metaKey || event.altKey) return;
   if (['ArrowRight', 'ArrowLeft'].includes(event.key)) {
     event.preventDefault();
     // Held keys never add navigation debt, including across completed turns.

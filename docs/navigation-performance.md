@@ -64,12 +64,26 @@ the real idle callback before each input, with `didTimeout: true`. The report
 identifies fitting probes instead of equating all unprepared turns with cold
 extraction. Source extraction may also have been warmed by document analysis.
 
+## Page flip speed
+
+Book view’s Page flip toolbar offers a local profile preference from Instant
+(0ms) to 500ms in 25ms steps. The default is 350ms. Each turn reads the
+preference before preparing its destination, so an adjustment during a turn
+applies to the next turn. The sample turn in the speed panel leaves the reading
+position alone. Reduced motion and transitions where both spreads contain only
+scan/error/overflow fallbacks commit without an animation.
+
 ## #18 policy and verification
 
-Normal turns use 160ms with the existing forward/reverse hinge. Reduced motion
-and transitions where both spreads contain only scan/error/overflow fallbacks
-commit without that animation. Borrow/restore identity and cancellation remain
-unchanged. Local advisory targets are prepared-turn p95 visible opportunity
+The #18 change used 160ms with the existing forward/reverse hinge and retained
+borrow/restore identity and cancellation. The navigation performance harness
+sets a 160ms profile and serves a 5ms ruler step to admit that value in its
+isolated browser. This keeps historical measurements and calibrated budgets at
+the same animation duration. The speed control’s browser test checks the 25ms
+product step and current default separately. The benchmark’s runner fingerprint
+includes the shared HTML shell and the test-only step override. Historical
+source runs load tracked source files from the selected baseline commit.
+Local advisory targets at the benchmark speed are prepared-turn p95 visible opportunity
 within 100ms and committed position within 250ms; cold preparation is reported
 separately, with a 300ms advisory commit target for the ordinary corpus.
 

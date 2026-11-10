@@ -1,3 +1,5 @@
+export const DEFAULT_PAGE_TURN_DURATION = 350;
+
 /**
  * Animate borrowed pages without duplicating their text trees. Empty placeholders
  * retain the source grid slots; cleanup restores identity, order and listeners.
@@ -5,7 +7,7 @@
  * pages only after this resolves as
  * "finished".
  */
-export async function turnPages({ stage, targetPages, direction, singlePage, signal, reducedMotion = false, duration = 160 }) {
+export async function turnPages({ stage, targetPages, direction, singlePage, signal, reducedMotion = false, duration = DEFAULT_PAGE_TURN_DURATION }) {
   if (signal?.aborted) return 'cancelled';
   if (reducedMotion || duration <= 0) return 'finished';
 
