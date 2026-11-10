@@ -25,8 +25,9 @@ self.addEventListener('fetch', event => {
       catch { return (await caches.match('/')) || Response.error(); }
     }
     // Prefer current files when the local server is running; fall back offline.
-    try { const response = await fetch(event.request); if (response.ok) return response; }
+    let response;
+    try { response = await fetch(event.request); if (response.ok) return response; }
     catch { /* Offline: use the bundled asset cache. */ }
-    return (await caches.match(event.request)) || Response.error();
+    return (await caches.match(event.request)) || response || Response.error();
   })());
 });
