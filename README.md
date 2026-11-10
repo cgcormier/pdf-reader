@@ -12,7 +12,7 @@ Commercial use outside those permissions, including selling Folio or incorporati
 
 ## Open it
 
-Double-click **Folio-1.0.0-Windows-x64.exe** from `release/`. This is a portable desktop app for **64-bit Windows 10 or later**. It opens its own window and includes Chromium, the reader, PDF.js, fonts and PDF assets. No Node.js, Chrome installation, local server, administrator access, or internet connection is required to read PDFs. Close the window to quit; opening the executable again while Folio is running brings the existing window forward.
+Double-click **Folio-2.0.0-Windows-x64.exe** from `release/`. This is a portable desktop app for **64-bit Windows 10 or later**. It opens its own window and includes Chromium, the reader, PDF.js, fonts and PDF assets. No Node.js, Chrome installation, local server, administrator access, or internet connection is required to read PDFs. Close the window to quit; opening the executable again while Folio is running brings the existing window forward.
 
 The executable can be moved to a convenient folder. Its bundled application files are extracted to a temporary folder at launch; your shelf, preferences and reading positions are stored separately in **`%APPDATA%\Folio`**. Replacing the executable with a new build preserves that data. Keep your original PDFs separately as a backup. This build is unsigned, so Windows may show an unknown-publisher or SmartScreen prompt.
 
@@ -87,7 +87,7 @@ Requires Node.js **22.13+** (tested with 22.21.0) and npm. PDF.js is pinned to 6
 ```powershell
 npm ci
 npm run desktop       # Build and launch a development desktop window
-npm run dist:win      # Build release/Folio-1.0.0-Windows-x64.exe
+npm run dist:win      # Build release/Folio-2.0.0-Windows-x64.exe
 ```
 
 The desktop build uses pinned Electron and electron-builder versions and works on Windows or Linux. The first build downloads the required runtime and packaging tools; subsequent app launches work offline. `electron-builder.json` controls the package, and only the production web assets and `desktop/` entry point are included. The Windows executable has Folio's icon and version metadata; code signing is disabled because no signing certificate is configured. `npm run dist:linux` also creates a Linux x64 archive.
