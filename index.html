@@ -55,7 +55,7 @@
     </aside>
     <section class="reader-panel" aria-label="Reader">
       <div class="reader-toolbar"><button id="contents-toggle" class="quiet-button mobile-contents" type="button" aria-expanded="false" aria-controls="book-contents">Contents</button><div class="view-switch" role="group" aria-label="Reading view"><button id="book-view" class="view-button active" type="button" aria-pressed="true">Book view</button><button id="original-view" class="view-button" type="button" aria-pressed="false">Original PDF</button></div><div class="reading-layout-switch" role="group" aria-label="Reading layout"><span class="page-turn-speed-pair"><button id="pages-layout" class="layout-button active" type="button" aria-pressed="true" title="Smooth book page turns (S)">Page flip</button>
-      <button id="page-turn-speed-button" class="page-turn-speed-button" type="button" aria-label="Turn speed" aria-expanded="false" aria-controls="page-turn-speed-panel" hidden>
+      <button id="page-turn-speed-button" class="page-turn-speed-button" type="button" aria-label="Page-turn duration" aria-expanded="false" aria-controls="page-turn-speed-panel" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M1.75 7.5h2.5M1 12h3.25M2 16.5h2.25"/>
           <path d="M7 4.5h6.2c2.2 0 4.2 1.1 4.6 2.7.3 1.2-.5 2.2-1.6 2.7-1.1.5-2.4.3-2.9-.5-.5-.8.2-1.7 1-1.8 1-.2 1.7.5 1.5 1.6-.2 1.2-1.5 2.1-3.1 2.3"/>
@@ -71,17 +71,19 @@
   </main>
   <section id="page-turn-speed-panel" class="page-turn-speed-panel" popover aria-labelledby="speed-heading">
     <header>
-      <div><h2 id="speed-heading">Turn speed</h2><p class="speed-subtitle">Set the pace of the page flip.</p></div>
-      <button type="button" class="speed-close" aria-label="Close turn speed">×</button>
+      <div><h2 id="speed-heading">Page-turn duration</h2><p class="speed-subtitle">Set the pace of the page flip.</p></div>
+      <button type="button" class="speed-close" aria-label="Close page-turn duration settings">×</button>
     </header>
     <div class="speed-range-label">
-      <label for="page-turn-speed-range">Turn duration</label><output aria-hidden="true" for="page-turn-speed-range"></output>
+      <label for="page-turn-speed-range">Page-turn duration</label><output aria-hidden="true" for="page-turn-speed-range"></output>
     </div>
     <div class="speed-wheel">
       <div class="speed-ruler" aria-hidden="true"><div class="speed-tape"></div></div>
+      <span class="speed-endpoint speed-quick" aria-hidden="true">Quick</span>
+      <span class="speed-endpoint speed-leisurely" aria-hidden="true">Leisurely</span>
       <input id="page-turn-speed-range" type="range" min="0" max="500" step="25" aria-describedby="speed-instructions">
     </div>
-    <p id="speed-instructions" class="speed-instructions">Scroll or drag the ruler. Use arrow keys when focused.</p>
+    <p id="speed-instructions" class="speed-instructions">Drag or scroll to set the pace. Use arrow keys when focused.</p>
     <div class="speed-preview">
       <span class="speed-book" aria-hidden="true">
         <span class="speed-paper"><small>02</small></span>

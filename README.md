@@ -122,6 +122,12 @@ npm start
 
 For a hosted preview, serve the complete `dist/` directory at the root of a separate HTTPS origin. Missing assets should return HTTP 404. The build includes `404.html` for static hosts that use it and keeps host control files out of the offline cache list. Hosted previews have their own browser shelf. Run `node tests/bookmark-persistence.browser.mjs` and `node tests/offline.browser.mjs` after building to check bookmark isolation between tabs and the offline worker.
 
+### Cloudflare branch deployments
+
+The `pdf-reader` Worker is connected to `cgcormier/pdf-reader`. Its dashboard build settings select `main` for production, with `npm run build` followed by `npx wrangler deploy`. Preview builds are enabled for other branches, using `npm run build` followed by `npx wrangler preview`. These branch settings live in Cloudflare under **Settings → Builds**.
+
+To publish a feature preview, test and commit the intended changes on its feature branch, then run `git push -u origin HEAD` on the first push. Subsequent `git push` commands rebuild that branch's preview. Open the preview URL in the Cloudflare build details and verify the deployed commit before testing. Merging into `main` triggers the production build. Local edits and local commits reach the hosted site when pushed. Each preview hostname has its own browser shelf and preferences.
+
 ## Verification
 
 For the current October audit acceptance matrix, shared gate commands, retained

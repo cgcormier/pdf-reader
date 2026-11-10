@@ -21,6 +21,7 @@ export function attachPageTurnSpeed(reducedMotion) {
   let rulerMotion;
   let practiceTurn;
   let drag;
+  let dragFrame;
   let wheelDelta = 0;
   let wheelTime = 0;
 
@@ -36,10 +37,16 @@ export function attachPageTurnSpeed(reducedMotion) {
     tape.append(tick);
   }
 
-  function updateRuler(animate = false) {
+  function updateReadout() {
     const ms = range.valueAsNumber;
-    output.value = ms ? `${ms} ms` : 'Instant';
+    const label = ms ? `${ms} ms` : 'Instant';
+    if (output.value === label) return;
+    output.value = label;
     range.setAttribute('aria-valuetext', ms ? `${ms} milliseconds` : 'Instant');
+  }
+
+  function updateRuler(animate = false, ms = range.valueAsNumber) {
+    updateReadout();
     const previous = animate && !reducedMotion.matches ? getComputedStyle(tape).transform : 'none';
     const next = `translateX(calc(var(--speed-tick-width) * -${ms / step + 0.5}))`;
     rulerMotion?.cancel();
@@ -58,6 +65,33 @@ export function attachPageTurnSpeed(reducedMotion) {
     const before = range.valueAsNumber;
     range.valueAsNumber = ms;
     if (range.valueAsNumber !== before) saveDuration(animate);
+  }
+
+  function renderDrag() {
+    dragFrame = undefined;
+    range.valueAsNumber = Math.round(drag.ms / step) * step;
+    updateRuler(false, drag.ms);
+  }
+
+  function moveDrag(event) {
+    // Clamping each delta discards overshoot so reversing at an endpoint
+    // immediately moves the tape back under the pointer.
+    drag.ms = Math.max(0, Math.min(max, drag.ms + (drag.x - event.clientX) / drag.width * step));
+    drag.x = event.clientX;
+    dragFrame ??= requestAnimationFrame(renderDrag);
+  }
+
+  function finishDrag(animate = true, persist = true) {
+    if (!drag) return;
+    cancelAnimationFrame(dragFrame);
+    dragFrame = undefined;
+    const { id, start } = drag;
+    if (persist) range.valueAsNumber = Math.round(drag.ms / step) * step;
+    drag = undefined;
+    wheel.classList.remove('is-dragging');
+    if (wheel.hasPointerCapture(id)) wheel.releasePointerCapture(id);
+    updateRuler(animate);
+    if (persist && range.valueAsNumber !== start) savePreference('page-turn-duration', range.valueAsNumber);
   }
 
   function updateMotionNote() {
@@ -111,6 +145,7 @@ export function attachPageTurnSpeed(reducedMotion) {
     const open = event.newState === 'open';
     trigger.setAttribute('aria-expanded', String(open));
     if (!open) {
+      finishDrag(false);
       pinned = false;
       clearTimeout(opening);
       clearTimeout(closing);
@@ -156,9 +191,16 @@ export function attachPageTurnSpeed(reducedMotion) {
     closePanel(pinned || panel.contains(document.activeElement));
   });
 
-  range.addEventListener('input', () => saveDuration(true));
+  range.addEventListener('input', () => {
+    finishDrag(false, false);
+    saveDuration(true);
+  });
   wheel.addEventListener('wheel', event => {
     if (!event.cancelable || event.ctrlKey || event.metaKey) return;
+    if (drag) {
+      event.preventDefault();
+      return;
+    }
     const units = event.deltaMode;
     const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
     const ms = range.valueAsNumber;
@@ -180,18 +222,35 @@ export function attachPageTurnSpeed(reducedMotion) {
   }, { passive: false });
   wheel.addEventListener('pointerleave', () => { wheelDelta = 0; });
   wheel.addEventListener('pointerdown', event => {
-    if (!event.isPrimary || event.button !== 0) return;
+    if (!event.isPrimary || event.button !== 0 || drag) return;
     // The wheel handles relative drag while the native range owns keyboard
     // input. Native touch handling on the range would jump to the pressed X.
     event.preventDefault();
     range.focus({ preventScroll: true });
+    const width = parseFloat(getComputedStyle(wheel).getPropertyValue('--speed-tick-width'));
+    const transform = getComputedStyle(tape).transform;
+    const offset = transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41;
+    const ms = Math.max(0, Math.min(max, (-offset / width - 0.5) * step));
+    rulerMotion?.cancel();
+    tape.style.transform = transform;
+    wheel.classList.add('is-dragging');
+    wheelDelta = 0;
     wheel.setPointerCapture(event.pointerId);
-    drag = { id: event.pointerId, x: event.clientX, ms: range.valueAsNumber };
+    drag = { id: event.pointerId, x: event.clientX, ms, width, start: range.valueAsNumber };
   });
   wheel.addEventListener('pointermove', event => {
-    if (drag?.id === event.pointerId) setDuration(drag.ms + Math.round((drag.x - event.clientX) / 18) * step, false);
+    if (drag?.id === event.pointerId) moveDrag(event);
   });
-  wheel.addEventListener('lostpointercapture', () => { drag = undefined; });
+  wheel.addEventListener('pointerup', event => {
+    if (drag?.id !== event.pointerId) return;
+    moveDrag(event);
+    finishDrag();
+  });
+  for (const name of ['pointercancel', 'lostpointercapture']) {
+    wheel.addEventListener(name, event => {
+      if (drag?.id === event.pointerId) finishDrag();
+    });
+  }
 
   reducedMotion.addEventListener('change', () => {
     practiceTurn?.cancel();
