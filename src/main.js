@@ -9,6 +9,7 @@ import { turnPages } from './page-turn.js';
 import { attachPageTurnSpeed } from './page-turn-speed.js';
 import { FIT_CACHE_LIMIT, paginateTextSteps, createBookPager } from './book-pagination.js';
 import { createSpreadBuffer } from './spread-buffer.js';
+import { createFitGate } from './fit-gate.js';
 import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
 import { resolveReadingPosition, readingPosition, paginateLayoutSteps, renderLayout, renderAnnotations, hasSourceChapterTitle } from './layout-reading.js';
 import { preference, savePreference, getBook, putBook, updateBook, setBookBookmark, deleteBook, listBooks } from './storage.js';
@@ -34,6 +35,7 @@ let fittedSpread = null;
 let spreadPreparation = null;
 let spreadWarmup = null;
 let interruptedRender = false;
+const fitGate = createFitGate();
 const fragmentCache = new Map();
 let fragmentCharacters = 0;
 const fragmentCharacterBudget = 250_000;
@@ -772,7 +774,7 @@ function fillFragment(page, fragment) {
     });
   }
 }
-async function fitPageSteps(steps, fits, check) {
+async function fitPageSteps(steps, fits, check, signal) {
   const measured = new Map();
   let batch = performance.now(); let requests = 0;
   let step = steps.next();
@@ -784,6 +786,16 @@ async function fitPageSteps(steps, fits, check) {
       readerMetric('fit-yield', { duration: performance.now() - batch, requests });
       await new Promise(resolve => setTimeout(resolve, 0));
       check(); batch = performance.now(); requests = 0;
+    }
+    // The requested spread is ready before this gate closes. Pause speculative
+    // fitting during the turn without blocking shared foreground preparation.
+    if (fitGate.paused) {
+      readerMetric('fit-yield', { duration: performance.now() - batch, requests });
+      while (fitGate.paused) {
+        await fitGate.wait(signal);
+        check();
+      }
+      batch = performance.now(); requests = 0;
     }
     const fragment = step.value; const key = `${fragment.start}:${fragment.end}`;
     let result;
@@ -852,7 +864,7 @@ function fittedPager({ signal, renderEpoch, source }) {
           return result;
         };
         const steps = data.layout ? paginateLayoutSteps(data.layout, { signal }) : paginateTextSteps(text, { signal });
-        fragments = await fitPageSteps(steps, fits, check);
+        fragments = await fitPageSteps(steps, fits, check, signal);
       } finally { host.remove(); readerMetric('fitting-end', { page: number, aborted: signal.aborted, duration: performance.now() - fittingStarted }); }
     }
     check();
@@ -1057,8 +1069,14 @@ async function flipTo(direction) {
     const fallbackOnly = value => value.leaves.every(leaf => ['scan', 'error', 'overflow'].includes(leaf.kind));
     const fallback = fallbackOnly(fittedSpread) && fallbackOnly(spread);
     readerMetric('turn-ready', { preparation: animationStarted - started, page: spread.anchor.page, offset: spread.anchor.offset, fallback });
-    const result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
-      reducedMotion: reducedMotion.matches || fallback, duration });
+    const releaseFitting = fitGate.pause();
+    let result;
+    try {
+      result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
+        reducedMotion: reducedMotion.matches || fallback, duration });
+    } finally {
+      releaseFitting();
+    }
     readerMetric('turn-animation', { duration: performance.now() - animationStarted, result });
     if (result !== 'finished' || controller.signal.aborted || renderEpoch !== epoch) return;
     // Only a completed turn changes the book or its saved source-page anchor.

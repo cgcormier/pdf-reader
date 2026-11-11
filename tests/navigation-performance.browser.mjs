@@ -2,6 +2,8 @@
  * node tests/navigation-performance.browser.mjs metrics --calibrate=PATH --source-ref=BASELINE
  * node tests/navigation-performance.browser.mjs [metrics|all] --budget=PATH
  * node tests/navigation-performance.browser.mjs [input|work] (deterministic gates)
+ * Add --frame-cadence to sample requestAnimationFrame callback intervals during turns.
+ * These callbacks are a main-thread cadence proxy, not presented-frame FPS.
  */
 import assert from 'node:assert/strict';
 import { waitForAsync } from './browser-wait.mjs';
@@ -24,6 +26,9 @@ assert.ok(!calibrationPath || sourceRef, 'Calibration requires an explicit basel
 assert.ok(!(sourceRef && !calibrationPath), '--source-ref is reserved for baseline calibration');
 const started = new Date().toISOString();
 const selection = process.argv.find(arg => ['metrics', 'input', 'work', 'all'].includes(arg)) || 'all';
+const frameCadence = process.argv.includes('--frame-cadence');
+assert.ok(!frameCadence || selection === 'metrics' || selection === 'all',
+  '--frame-cadence requires metrics or all');
 await mkdir('output/playwright/navigation-performance', { recursive: true });
 const run = await mkdtemp('output/playwright/navigation-performance/run-');
 // Isolate #18's animation comparison while the fitting lane is developed.
@@ -61,6 +66,10 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const report = { kind: 'navigation', started, selection, status: 'running', baseline, originalFitting, environment: environment(),
   turnDurationPreferenceMs: benchmarkTurnDuration, rulerStepOverrideMs: 5,
   provenance: await provenance(['index.html', 'tests/navigation-performance.browser.mjs', 'tests/performance-gate.mjs', 'tests/browser-wait.mjs', 'tests/fidelity-fixtures.mjs', 'tests/pdf-layout-fixture.mjs', 'package-lock.json'], sourceRef), metrics: [], input: [], work: [], errors: [] };
+if (frameCadence) report.frameCadence = {
+  measurement: 'requestAnimationFrame callback intervals during page-turn animations',
+  limitation: 'This headless run measures a main-thread callback proxy, not frames presented by a physical display or compositor. Existing test instrumentation also adds overhead. Only gaps between observed callbacks are reported; gaps before the first and after the last callback are excluded.',
+};
 let context;
 async function settled(page) {
   await page.waitForFunction(() => !document.querySelector('#modal').open && (document.body.classList.contains('scroll-mode')
@@ -113,7 +122,7 @@ async function visibleText(page) {
     text: leaf.querySelector('.page-prose')?.textContent,
   })));
 }
-async function clear(page) { await page.evaluate(() => { window.auditEvents = []; }); }
+async function clear(page) { await page.evaluate(() => { window.auditEvents = []; window.auditFrameSamples = []; window.auditCaptureFrames = false; }); }
 async function warm(page) {
   return page.evaluate(async () => {
     const index = window.auditEvents.length;
@@ -124,6 +133,7 @@ async function warm(page) {
 }
 async function turnMetric(page) {
   await clear(page);
+  if (frameCadence) await page.evaluate(() => { window.auditCaptureFrames = true; });
   await rawClick(page, 'next-page'); await settled(page); await pause(35);
   return page.evaluate(() => {
     const events = window.auditEvents;
@@ -132,6 +142,13 @@ async function turnMetric(page) {
     const commit = events.find(e => e.type === 'turn-commit');
     const visible = events.find(e => e.type === 'paint-visible');
     const probes = events.filter(e => e.type === 'fit-probe');
+    const frames = window.auditFrameSamples?.[0];
+    const intervals = frames?.timestamps.slice(1).map((time, index) => time - frames.timestamps[index]);
+    const sortedIntervals = intervals?.slice().sort((a, b) => a - b);
+    const cadence = frames ? { callbacks: frames.timestamps.length, intervalsMs: intervals,
+      maxIntervalMs: sortedIntervals.length ? sortedIntervals.at(-1) : null,
+      p95IntervalMs: sortedIntervals.length ? sortedIntervals[Math.ceil(sortedIntervals.length * .95) - 1] : null,
+      state: frames.state } : null;
     const sum = (items, key) => items.reduce((n, e) => n + (e[key] || 0), 0);
     return { events, probes: probes.length, candidateReconstructions: probes.length, layoutReads: sum(probes, 'reads'),
       candidateMs: sum(probes, 'construction'), layoutMs: sum(probes, 'layout'),
@@ -143,6 +160,7 @@ async function turnMetric(page) {
       longTaskWindow: input && commit ? { start: input.time, end: commit.time } : null,
       visibleMs: visible && input ? visible.time - input.time : null,
       committedMs: commit && input ? commit.time - input.time : null,
+      ...(window.auditFrameCadenceEnabled ? { frameCadence: cadence } : {}),
       anchor: commit && { page: commit.page, offset: commit.offset } };
   });
 }
@@ -440,8 +458,9 @@ try {
   context = await chromium.launchPersistentContext(`${run}/profile`, { channel: 'chrome', headless: true, viewport: { width: 1440, height: 900 } });
   report.environment.browser = context.browser()?.version();
   await context.addInitScript(installLongTasks);
-  await context.addInitScript(() => {
+  await context.addInitScript(({ frameCadence }) => {
     window.auditEvents = []; window.auditIdle = null;
+    window.auditFrameCadenceEnabled = frameCadence; window.auditFrameSamples = [];
     window.requestIdleCallback = callback => { window.auditIdle = callback; return 1; };
     window.cancelIdleCallback = () => { window.auditIdle = null; };
     window.__folioReaderMetric = event => {
@@ -480,6 +499,19 @@ try {
     Element.prototype.animate = function (...args) {
       const animation = animate.apply(this, args);
       if (this.classList.contains('page-turn-leaf')) window.auditEvents.push({ type: 'animation-start', time: performance.now(), duration: args[1]?.duration });
+      if (frameCadence && window.auditCaptureFrames && this.classList.contains('page-turn-leaf')) {
+        const sample = { timestamps: [], state: 'running' };
+        window.auditFrameSamples.push(sample);
+        let frameHandle;
+        const sampleFrame = time => {
+          if (sample.state !== 'running') return;
+          sample.timestamps.push(time);
+          frameHandle = requestAnimationFrame(sampleFrame);
+        };
+        frameHandle = requestAnimationFrame(sampleFrame);
+        const finishSample = state => { sample.state = state; cancelAnimationFrame(frameHandle); window.auditCaptureFrames = false; };
+        animation.finished.then(() => finishSample('finished'), () => finishSample('cancelled'));
+      }
       if (this.classList.contains('page-turn-leaf') && window.auditHold) {
         animation.pause(); window.auditAnimations.push(animation);
       }
@@ -491,7 +523,7 @@ try {
       if (deep && this.nodeType === 1 && (this.matches?.('.paper-page, .page-prose') || this.closest?.('.paper-page'))) throw new Error('Reader deep clone');
       return clone.call(this, deep);
     };
-  });
+  }, { frameCadence });
   const page = context.pages()[0]; page.on('pageerror', error => report.errors.push(error.message));
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   assert.notEqual(server.httpServer.address().port, 4173);
