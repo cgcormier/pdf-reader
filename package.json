@@ -12,7 +12,10 @@
     "desktop": "npm run build && electron .",
     "dist:win": "npm run build && electron-builder --win portable --x64",
     "dist:linux": "npm run build && electron-builder --linux tar.gz --x64",
-    "test:desktop": "npm run build && node tests/desktop.browser.mjs"
+    "test:desktop": "npm run build && node tests/desktop.browser.mjs",
+    "test:display": "node tests/display/run.mjs",
+    "test:display:oracle": "node tests/display/oracle-selftest.mjs",
+    "test:display:browser-oracle": "node tests/display/run.mjs --checker-selftest"
   },
   "dependencies": {
     "pdfjs-dist": "6.3.289"

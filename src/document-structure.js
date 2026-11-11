@@ -1,6 +1,7 @@
 import { readPageLayout } from './pdf-layout-adapter.js';
 import { structureLines } from './pdf-layout.js';
-export const STRUCTURE_VERSION = 8;
+import { observePageFurniture, confirmPageFurniture } from './page-furniture.js';
+export const STRUCTURE_VERSION = 9;
 
 const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
@@ -283,7 +284,7 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
   const seed = initial?.version === STRUCTURE_VERSION && initial.totalPages === Number(pdf.numPages)
     ? initial : await readDocumentStructure(pdf, { signal });
   const baseNodes = seed._outlineNodes ?? (seed.nodes ?? []).filter((n) => n.source === 'outline' || (n.source === 'fallback' && n.title === 'Opening pages'));
-  const state = { ...blankStructure(pdf, seed.pageLabels), ...seed, totalPages: Number(pdf.numPages) || 0, nodes: (seed.nodes ?? []).map((n) => ({ ...n, evidence: [...(n.evidence ?? [])] })), candidates: [...(seed.candidates ?? [])], scannedPages: [...new Set(seed.scannedPages ?? [])], failedPages: [...new Set(seed.failedPages ?? [])], _headingEvidence: [...(seed._headingEvidence ?? [])], _tocEvidence: [...(seed._tocEvidence ?? [])], _outlineNodes: baseNodes.map((n) => ({ ...n, evidence: [...(n.evidence ?? [])] })), _baseCandidates: [...(seed._baseCandidates ?? [])], status: 'scanning' };
+  const state = { ...blankStructure(pdf, seed.pageLabels), ...seed, totalPages: Number(pdf.numPages) || 0, nodes: (seed.nodes ?? []).map((n) => ({ ...n, evidence: [...(n.evidence ?? [])] })), candidates: [...(seed.candidates ?? [])], scannedPages: [...new Set(seed.scannedPages ?? [])], failedPages: [...new Set(seed.failedPages ?? [])], _headingEvidence: [...(seed._headingEvidence ?? [])], _tocEvidence: [...(seed._tocEvidence ?? [])], _furnitureEvidence: [...(seed._furnitureEvidence ?? [])], _outlineNodes: baseNodes.map((n) => ({ ...n, evidence: [...(n.evidence ?? [])] })), _baseCandidates: [...(seed._baseCandidates ?? [])], status: 'scanning' };
   state.pageNavigation = (seed.pageNavigation ?? []).map((node) => ({ ...node, evidence: [...(node.evidence ?? [])] }));
   const failed = new Set(state.failedPages);
   const scanned = new Set(state.scannedPages.filter((page) => !failed.has(page)));
@@ -297,6 +298,11 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
         const page = { view: layout.view };
         checkAbort(signal);
         const lines = structureLines(layout);
+        // A retry replaces evidence for this physical page, never counts it twice.
+        state._furnitureEvidence = state._furnitureEvidence.filter(row => row.page !== pageNumber);
+        state._headingEvidence = state._headingEvidence.filter(row => row.page !== pageNumber);
+        state._tocEvidence = state._tocEvidence.filter(row => row.tocPage !== pageNumber);
+        state._furnitureEvidence.push(...observePageFurniture(layout));
         if (lines.length) state.textPages += 1;
         failed.delete(pageNumber);
         // Numbered TOC rows can look like body lists; their page-reference
@@ -335,7 +341,10 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
               continue;
             }
             if (/^(?:act|scene)\b/i.test(line.text)) continue;
-            if (looksRunning(line, page.view)) continue;
+            // A one-off prominent opening can be near the top edge. Recurring
+            // furniture is removed later using document-wide evidence.
+            if (looksRunning(line, page.view) && !(line.size >= bodyMedian * 1.35
+              && (explicitHeading(line.text) || line.role === 'heading'))) continue;
             let parsed = explicitHeading(line.text); let display = parsed?.title; let y = line.y;
             let pairedOutlineId = null; let titleSourceLineId = null;
             if (parsed?.bare) {
@@ -362,7 +371,9 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
               // The layout combines centering, whitespace and title typography;
               // its generic heading role alone does not establish Contents.
               const reasons = line.role === 'heading' ? line.headingReasons ?? [] : [];
-              const isolatedTitle = reasons.includes('Centered title casing, separating whitespace and distinct size');
+              const topOpening = looksRunning(line, page.view) && line.role === 'heading' && line.size >= bodyMedian * 1.45
+                && next && line.y - next.y >= line.size && line.y - next.y <= line.size * 5;
+              const isolatedTitle = topOpening || reasons.includes('Centered title casing, separating whitespace and distinct size');
               const smallCapsTitle = reasons.includes('Centered small-capitals title following a heading with separating whitespace');
               const previous = lines[i - 1];
               const layoutParentLineId = smallCapsTitle && previous?.role === 'heading' && previous.regionId === line.regionId
@@ -391,8 +402,8 @@ export async function analyzeDocumentStructure(pdf, { signal, onProgress, onUpda
     }
   }
   checkAbort(signal);
-  finalize(state, labels);
   state.status = 'complete';
+  finalize(state, labels);
   checkAbort(signal); onUpdate?.(snapshotOf(state));
   return snapshotOf(state);
 }
@@ -446,9 +457,9 @@ function crediblePlayHeadings(headings) {
 }
 
 function finalize(state, labels) {
-  const headings = state._headingEvidence ?? [];
-  const counts = new Map();
-  for (const h of headings) { const k = titleKey(h.title); counts.set(k, (counts.get(k) ?? 0) + 1); }
+  state.furniture = state.status === 'complete' ? confirmPageFurniture(state._furnitureEvidence ?? [], state._headingEvidence ?? []) : {};
+  const confirmed = (state._furnitureEvidence ?? []).filter(row => row.items.some(item => state.furniture[row.page]?.includes(item)));
+  const headings = (state._headingEvidence ?? []).filter(h => !confirmed.some(row => row.page === h.page && row.lines.includes(h.sourceLineId)));
   const stylePages = new Map();
   for (const h of headings) if (h.style) {
     if (!stylePages.has(h.style)) stylePages.set(h.style, new Set());
@@ -458,17 +469,14 @@ function finalize(state, labels) {
   state.candidates = [...state._baseCandidates];
   state.tocUnresolved = 0;
   const labelMap = pageLabelMap(labels);
-  const toc = state._tocEvidence ?? [];
+  const toc = (state._tocEvidence ?? []).filter(entry => !confirmed.some(row => row.page === entry.tocPage && Math.abs(row.sourceY - entry.tocY) < 2));
   const playHeadings = crediblePlayHeadings(headings);
   const headingInfo = headings.map((h) => {
     const prominent = h.size >= h.median * 1.35;
     const styleCorroborated = (stylePages.get(h.style)?.size ?? 0) >= 2;
     return { h, prominent, styleCorroborated, credible: h.play ? playHeadings.has(h) : h.layoutTitle || h.layoutParentLineId ? true : h.explicit ? prominent : prominent && styleCorroborated };
   });
-  const firstProminent = new Map();
-  for (const info of headingInfo) if ((info.prominent || info.h.layoutTitle || info.h.layoutParentLineId) && !firstProminent.has(titleKey(info.h.title))) firstProminent.set(titleKey(info.h.title), info.h);
-  const repeatedRunning = (h) => (counts.get(titleKey(h.title)) ?? 0) >= 3
-    && (h.play ? h.play.family === 'act' && !playHeadings.has(h) : firstProminent.get(titleKey(h.title)) !== h);
+
 
   // Only already-credible headings can establish an offset. A TOC target may
   // then corroborate a weaker explicit heading at that exact page.
@@ -510,7 +518,10 @@ function finalize(state, labels) {
   const headingSizes = new Map();
   for (const h of headings) {
     const info = headingInfo.find((value) => value.h === h);
-    if (repeatedRunning(h)) continue;
+    // Repeated standalone Act labels without a credible scene/sequence are
+    // running play cues, not review candidates. Keep this rule play-specific.
+    if (h.play?.family === 'act' && !playHeadings.has(h)
+      && headings.filter(other => other.play?.family === 'act' && other.play.number === h.play.number).length >= 3) continue;
     const corroborated = tocMatchedHeadings.has(h) || outlineCorroborates(h) || h.pairedOutlineId;
     if (!info.credible && !corroborated) {
       state.candidates.push(makeCandidate({ title: h.title, page: h.page, y: h.y, source: 'headings', evidence: [...h.evidence, info.prominent ? 'No outline, contents, or repeated-style corroboration' : 'Typography is close to body text'], pageLabel: labels?.[h.page - 1] })); continue;

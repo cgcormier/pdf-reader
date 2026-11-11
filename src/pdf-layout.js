@@ -1,5 +1,5 @@
 /** Deterministic, page-local interpretation. No PDF.js or DOM objects retained. */
-export const LAYOUT_VERSION = 1;
+export const LAYOUT_VERSION = 2;
 const clean = value => String(value ?? '').replace(/\s+/gu, ' ').trim();
 const median = values => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -407,7 +407,7 @@ export function conservation(layout) {
   return { valid: errors.length === 0, errors };
 }
 
-export function interpretPage(content, { pageNumber = 1, view = [0, 0, 600, 800], viewport, structTree, documentId = null, rotation = 0 } = {}) {
+export function interpretPage(content, { pageNumber = 1, view = [0, 0, 600, 800], viewport, structTree, documentId = null, rotation = 0, furniture = [] } = {}) {
   const { runs, matrix } = capture(content, { pageNumber, view, viewport });
   const width = viewport?.width ?? view[2] - view[0]; const height = viewport?.height ?? view[3] - view[1];
   const sizeRuns = runs.filter(r => clean(r.text).length > 1 && !/^FTLN|^\d+$/i.test(clean(r.text))).sort((a, b) => a.size - b.size);
@@ -417,6 +417,8 @@ export function interpretPage(content, { pageNumber = 1, view = [0, 0, 600, 800]
   const caps = initials(runs, size);
   const rawLines = groupLines(runs, caps, size, width);
   const marginal = annotationLines(rawLines, { width, height, pageNumber }, size);
+  const furnitureItems = new Set(furniture);
+  for (const line of rawLines) if (line.runs.some(run => furnitureItems.has(run.index))) marginal.set(line.id, 'running-header');
   const regions = []; const lines = orderRegions(rawLines.filter(l => !marginal.has(l.id)), size, regions, 0, width);
   const tags = taggedRoles(structTree, runs, lines);
   const blocks = makeBlocks(lines, regions, size, tags, height);

@@ -13,7 +13,7 @@ function wait(promise, signal) {
 }
 
 /** Shared pending reads; aborting one consumer does not cancel another's page. */
-export async function readPageLayout(pdf, number, { signal } = {}) {
+export async function readPageLayout(pdf, number, { signal, furniture = [] } = {}) {
   abort(signal);
   if (!Number.isInteger(number) || number < 1 || number > pdf.numPages) throw new RangeError(`Page number must be between 1 and ${pdf.numPages}.`);
   let cache = documents.get(pdf);
@@ -40,8 +40,9 @@ export async function readPageLayout(pdf, number, { signal } = {}) {
           }
         } catch { /* Unsupported operator lists retain the TextContent fallback. */ }
       }
-      return interpretPage(content, { pageNumber: number, view: page.view,
-        viewport: page.getViewport?.({ scale: 1 }), structTree, documentId: pdf.fingerprints?.[0] ?? null, rotation: page.rotate ?? 0 });
+      const options = { pageNumber: number, view: page.view, viewport: page.getViewport?.({ scale: 1 }),
+        structTree, documentId: pdf.fingerprints?.[0] ?? null, rotation: page.rotate ?? 0 };
+      return { content, options, layout: interpretPage(content, options) };
     })();
     cache.set(number, pending);
     pending.catch(() => { if (cache.get(number) === pending) cache.delete(number); });
@@ -51,7 +52,7 @@ export async function readPageLayout(pdf, number, { signal } = {}) {
   cache.delete(number); cache.set(number, pending);
   const result = await wait(pending, signal);
   abort(signal);
-  return result;
+  return furniture.length ? interpretPage(result.content, { ...result.options, furniture }) : result.layout;
 }
 
 export function clearPageLayouts(pdf) { documents.delete(pdf); }

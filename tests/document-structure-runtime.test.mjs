@@ -139,7 +139,8 @@ test('local Hamlet has all five Acts and twenty Scenes at exact anchors, with no
     assert.deepEqual(scenes.map((node) => [node.title, node.page, node.y, node.parentId, node.kind]),
       pagesByAct.flatMap((pages, act) => pages.map((page, scene) => [`Scene ${scene + 1}`, page, yByAct[act][scene], acts[act].id, 'chapter'])));
     assert.equal(new Set(result.nodes.map((node) => node.id)).size, result.nodes.length);
-    assert.equal(result.nodes.filter((node) => node.source !== 'fallback').length, 25);
+    assert.deepEqual(result.nodes.filter((node) => !/^(?:Act|Scene) /.test(node.title) && node.source !== 'fallback').map(node => [node.title, node.page, node.y]), [['Characters in the Play', 7, 898]]);
+    assert.equal(result.nodes.filter((node) => node.source !== 'fallback').length, 26);
     assert.equal(result._tocEvidence.length, 0);
     assert.equal(result.tocUnresolved, 0);
     assert.equal(result.candidates.filter((node) => node.source === 'toc').length, 0);
