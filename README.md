@@ -2,6 +2,21 @@
 
 A tiny local PDF reading room for Windows, also available in Chrome: walnut accents, parchment, serif type, chapter contents and source page numbers. Choose continuous scrolling or an open-book spread. The design and build pipeline are in [docs/PLAN.md](docs/PLAN.md).
 
+## Website and next step
+
+**[Open viewitpretty.com](https://viewitpretty.com)** · [Source](https://github.com/cgcormier/pdf-reader) · [Project state and transition plan](docs/project-state.md)
+
+**Next: transition the product identity from Folio to viewitpretty.** The website is already available at viewitpretty.com; its reader and this codebase still use Folio branding. The transition is planned, not completed. Existing Folio launchers, executable names and storage locations below remain the current instructions.
+
+### For developers and reviewers
+
+- **Try it:** open the website and read the built-in sample before importing a PDF.
+- **Core work:** local PDF processing, automatic Contents, source-mapped Book / Original PDF views, bounded pagination and rendering, and persistent reading positions.
+- **Run locally:** Node.js 22.13+ and npm; `npm ci`, then `npm run dev`.
+- **Check the source:** `npm test` and `npm run build`; see [Development](#development) for browser and desktop checks, and [Verification](#verification) for dated results and limits.
+- **Understand the design:** [architecture and product boundaries](docs/PLAN.md), [layout interpretation](docs/layout-interpretation.md), and [current project state](docs/project-state.md).
+- **License:** source-available under PolyForm Noncommercial, not open source; see the license terms below.
+
 ## License
 
 Required Notice: Copyright (c) 2026 Carter Cormier
