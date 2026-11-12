@@ -4,6 +4,7 @@
   // Keep production routes in the Cloudflare dashboard and retain version URLs for rollback checks.
   "workers_dev": false,
   "preview_urls": true,
+  "previews": {},
   "assets": {
     "directory": "./dist",
     "html_handling": "auto-trailing-slash",

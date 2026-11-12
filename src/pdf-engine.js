@@ -242,11 +242,11 @@ function splitParagraphs(lines) {
 }
 
 /** Shared layout plus compatibility strings and a mapped legacy projection. */
-export async function extractPage(pdf, pageNumber, { signal } = {}) {
+export async function extractPage(pdf, pageNumber, { signal, furniture = [] } = {}) {
   if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pdf.numPages) {
     throw new RangeError(`Page number must be between 1 and ${pdf.numPages}.`);
   }
-  const layout = await readPageLayout(pdf, pageNumber, { signal });
+  const layout = await readPageLayout(pdf, pageNumber, { signal, furniture });
   const content = { items: layout.runs.map(run => ({ str: run.text, width: run.width, transform: run.transform, hasEOL: run.hasEOL, sourceIndex: run.index })) };
   // Retain the old projection solely for saved-position migration. It must use
   // the old ordering, footer filter, whitespace and paragraph separators.

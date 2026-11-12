@@ -138,14 +138,15 @@ test('modest layout title retains its applicable outline Part parent', async () 
   assert.ok(title.level > part.level);
 });
 
-test('repeated modest titles preserve the first credible opening and its smaller title child', async () => {
+test('repeated modest openings on separate pages remain distinct with their title children', async () => {
   for (const page of modestHeadingPages) {
     const doc = pdf({ count: 3 });
     doc.getPage = async () => ({ view: page.view,
       getTextContent: async () => ({ items: page.items.map(({ text, x, y, size, width }) => item(text, x, y, size, width)) }) });
     const result = await analyzeDocumentStructure(doc);
-    assert.deepEqual(result.nodes.map((node) => [node.title, node.page]), page.items.filter((_, index) => index === 10 || page === modestHeadingPages[1] && index === 11).map(({ text }) => [text, 1]));
-    if (page === modestHeadingPages[1]) assert.equal(result.nodes[1].parentId, result.nodes[0].id);
+    const titles = page.items.filter((_, index) => index === 10 || page === modestHeadingPages[1] && index === 11);
+    assert.deepEqual(result.nodes.map((node) => [node.title, node.page]), [1, 2, 3].flatMap(number => titles.map(({ text }) => [text, number])));
+    if (page === modestHeadingPages[1]) for (let index = 0; index < result.nodes.length; index += 2) assert.equal(result.nodes[index + 1].parentId, result.nodes[index].id);
     assert.equal(result.candidates.length, 0);
   }
 });

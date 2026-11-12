@@ -235,7 +235,10 @@ async function startStructureScan(fresh = false) {
   const scan = createStructureScanner(analyzeDocumentStructure, {
     onUpdate: snapshot => {
       if (book !== target || pdf !== source) return;
+      const furnitureChanged = JSON.stringify(target.structure?.furniture ?? {}) !== JSON.stringify(snapshot.furniture ?? {});
+      if (furnitureChanged && layout === 'scroll' && mode === 'book') book.bookPosition = captureScrollAnchor(book.page) ?? book.bookPosition;
       target.structure = snapshot;
+      if (furnitureChanged) pageCache.clear();
       target.scannedPages = snapshot.scannedPages.length;
       const chapters = chaptersFromNodes(structureNodes(snapshot, source.numPages));
       const chaptersChanged = JSON.stringify(chapters) !== JSON.stringify(target.chapters);
@@ -243,7 +246,7 @@ async function startStructureScan(fresh = false) {
       // Only a complete, successful scan can rule out text in later pages.
       if (mode === 'book' && hasNoReadableText()) setMode('original');
       // Saved chapter intros and fitted leaves must follow an upgraded detector.
-      else if (chaptersChanged) void render();
+      else if (chaptersChanged || furnitureChanged) void render();
       updateContents(); updateReadingPosition();
       persist({ structure: snapshot, chapters, scannedPages: target.scannedPages });
     },
@@ -610,7 +613,7 @@ async function pageText(number, source = pdf) {
   if (!pageCache.has(number)) {
     if (pageCache.size >= 6) pageCache.delete(pageCache.keys().next().value);
     const started = performance.now();
-    const pending = extractPage(source, number).finally(() => readerMetric('extraction', { page: number, duration: performance.now() - started }));
+    const pending = extractPage(source, number, { furniture: book.structure?.furniture?.[number] ?? [] }).finally(() => readerMetric('extraction', { page: number, duration: performance.now() - started }));
     pageCache.set(number, pending);
     pending.catch(() => { if (pageCache.get(number) === pending) pageCache.delete(number); });
   }
