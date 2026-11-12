@@ -1,0 +1,106 @@
+/* Common Ground / Reading Garden. Visual contract recovered from the design
+   atelier: paper first, pine structure, coral and yellow accents. Geometry,
+   pagination, transforms and focus visibility remain owned by the reader. */
+body[data-reader-design="common-ground"] {
+  --paper: #f4f1e7;
+  --paper-light: #fffdf7;
+  --paper-edge: #dedbc9;
+  --ink: #193f35;
+  --ink-soft: #36594d;
+  --ink-faint: #53685b;
+  --terracotta: #963f2c;
+  --terracotta-dark: #713021;
+  --terracotta-wash: #f4ddd2;
+  --moss: #617445;
+  --rule: #cbd0bd;
+  --control: #faf8ef;
+  --garden-coral: #e77356;
+  --garden-yellow: #e8c45a;
+  background: var(--paper);
+}
+body[data-reader-design="common-ground"] .app-header {
+  background: var(--paper-light);
+  border-bottom-color: var(--rule);
+  box-shadow: inset 0 3px var(--garden-coral);
+}
+body[data-reader-design="common-ground"] .brand svg,
+body[data-reader-design="common-ground"] .brand-dot { color: var(--terracotta); }
+body[data-reader-design="common-ground"] .contents-panel {
+  background: #e9eddf;
+  border-right-color: var(--rule);
+}
+body[data-reader-design="common-ground"] .chapter-link.active {
+  color: var(--ink);
+  background: #d9e4cc;
+}
+body[data-reader-design="common-ground"] .chapter-link.active::before { background: #193f35; }
+body[data-reader-design="common-ground"] .primary-button {
+  color: #102c24;
+  background: var(--garden-coral);
+  border-radius: 6px;
+}
+body[data-reader-design="common-ground"] .primary-button:hover { background: #ef947a; }
+body[data-reader-design="common-ground"] .count { color: #193f35; background: var(--garden-yellow); }
+body[data-reader-design="common-ground"] .view-switch {
+  border-color: var(--rule);
+  background: var(--control);
+  border-radius: 6px;
+}
+body[data-reader-design="common-ground"] .view-button.active,
+body[data-reader-design="common-ground"] .layout-button.active,
+body[data-reader-design="common-ground"] .layout-button[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--rule);
+  background: var(--paper-light);
+}
+body[data-reader-design="common-ground"] .drop-zone {
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border-color: #82977a;
+  border-radius: 8px;
+}
+body[data-reader-design="common-ground"] .drop-zone:is(:hover, .drag-over) {
+  background: var(--control);
+  border-color: var(--terracotta);
+}
+body[data-reader-design="common-ground"] .paper-page,
+body[data-reader-design="common-ground"] .page-prose { color: var(--ink); }
+body[data-reader-design="common-ground"] .paper-page { background: var(--paper-light); }
+body[data-reader-design="common-ground"] .left-page {
+  background: linear-gradient(90deg, var(--paper-light) 94%, var(--paper-edge));
+}
+body[data-reader-design="common-ground"] .right-page {
+  background: linear-gradient(90deg, var(--paper-edge), var(--paper-light) 6%);
+}
+body[data-reader-design="common-ground"] .shelf-cover { color: #fffdf7; background: #193f35; box-shadow: 2px 2px 0 var(--rule); }
+body[data-reader-design="common-ground"] .shelf-item:nth-child(3n + 2) .shelf-cover { color: #102c24; background: var(--garden-coral); }
+body[data-reader-design="common-ground"] .shelf-item:nth-child(3n) .shelf-cover { color: #193f35; background: var(--garden-yellow); }
+body[data-reader-design="common-ground"] .app-footer { background: var(--paper-light); border-color: var(--rule); }
+
+/* Theme choice never disables the independent dark-paper preference. */
+body[data-reader-design="common-ground"].dark-paper {
+  --paper: #172b25;
+  --paper-light: #213a31;
+  --paper-edge: #182d26;
+  --ink: #f4f1e7;
+  --ink-soft: #d5dfcb;
+  --ink-faint: #b7c7b3;
+  --terracotta: #f4aa90;
+  --terracotta-dark: #ffd0bb;
+  --terracotta-wash: #543e34;
+  --moss: #c4d39b;
+  --rule: #52685a;
+  --control: #2b4439;
+}
+body[data-reader-design="common-ground"].dark-paper .contents-panel { background: #1b332b; }
+body[data-reader-design="common-ground"].dark-paper .chapter-link.active { background: #344e3e; }
+body[data-reader-design="common-ground"].dark-paper .chapter-link.active::before { background: var(--garden-yellow); }
+body[data-reader-design="common-ground"].dark-paper .original-stage,
+body[data-reader-design="common-ground"].dark-paper .scroll-original { background: #14251f; }
+
+/* Existing mobile geometry and reduced-motion settings are intentionally
+   inherited; this stylesheet introduces no animations or movement. */
+@media (max-width: 760px) {
+  body[data-reader-design="common-ground"] .left-page,
+  body[data-reader-design="common-ground"] .right-page { background: var(--paper-light); }
+}

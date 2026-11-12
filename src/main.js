@@ -1,8 +1,20 @@
+import { attachContentsDrag } from './contents-drag.js';
 import './styles.css';
+import './contents-drag.css';
+import { attachDesignSwitcher } from './design-switcher.js';
+import './design-switcher.css';
+import './design-margin.css';
+import './design-signal.css';
+import './design-common.css';
+import { attachImmersiveFocus } from './immersive-focus.js';
+import './focus-exit-cue.css';
+import { attachFocusExitCue } from './focus-exit-cue.js';
 import { openPdf, extractPage, renderPdfPage, titleFromFilename } from './pdf-engine.js';
 import { STRUCTURE_VERSION, readDocumentStructure, analyzeDocumentStructure } from './document-structure.js';
 import { shouldAutoScanStructure, structureFromLegacy, structureNodes, structurePath, activeStructureNode, chaptersFromNodes, createStructureScanner } from './structure-model.js';
 import { demo } from './demo.js';
+import { sourcePageIdentity } from './page-identity.js';
+import { updateReaderCaption } from './reader-caption.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
 import { turnPages } from './page-turn.js';
@@ -22,6 +34,9 @@ function readerMetric(type, detail = {}) {
 const smallScreen = matchMedia('(max-width: 820px)');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const pageTurnSpeed = attachPageTurnSpeed(reducedMotion);
+attachFocusExitCue();
+attachContentsDrag();
+attachDesignSwitcher();
 let book = structuredClone(demo);
 let pdf = null;
 let mode = 'book';
@@ -30,6 +45,8 @@ let scroller = null;
 let pagedRenderController = null;
 let turnController = null;
 let pendingTurn = null;
+let turnCompletion = Promise.resolve();
+let finishTurnsForLayout = false;
 let pageFillPromise = Promise.resolve();
 let fittedSpread = null;
 let spreadPreparation = null;
@@ -436,18 +453,23 @@ function updateContents() {
   document.title = `${book.title} — Folio`;
 }
 function updateControls() {
+  updateReaderCaption($('reading-caption'), mode);
+  $('immersive-page-number').textContent = String(book.page);
+  $('immersive-page-number').setAttribute('aria-label', `Source page ${book.page}. Leave fullscreen reading`);
   const count = pageCount();
   const navigation = sourcePageNavigation(book.page, count, step());
   const fitted = mode === 'book' && layout === 'pages' ? fittedSpread : null;
   const end = fitted?.leaves.at(-1)?.page || navigation.end;
   const continued = fitted?.anchor.offset > 0;
+  const identity = sourcePageIdentity(book.page, end, count, continued);
   if (document.activeElement !== $('page-input')) $('page-input').value = book.page;
   $('page-input').max = count;
-  $('total-pages').textContent = `${end > book.page ? `– ${end} ` : ''}of ${count}${continued ? ' · continued' : ''}`;
-  $('page-input').setAttribute('aria-label', 'PDF page number');
+  $('page-position-label').textContent = identity.label;
+  $('total-pages').textContent = identity.tail;
+  $('page-input').setAttribute('aria-label', 'Go to source page');
   $('progress-slider').max = count;
   $('progress-slider').value = book.page;
-  $('progress-slider').setAttribute('aria-valuetext', end > book.page ? `PDF pages ${book.page} to ${end} of ${count}` : `PDF page ${book.page}${continued ? ', continued' : ''} of ${count}`);
+  $('progress-slider').setAttribute('aria-valuetext', identity.description);
   const atEnd = fitted ? fitted.next === null : navigation.end === count;
   const sourceLength = fragmentCache.get(book.page)?.at(-1)?.end || fitted?.leaves[0]?.layout?.projection.text.length || 1;
   const fraction = fitted ? Math.min(1, (book.bookPosition?.offset || 0) / sourceLength) : 0;
@@ -645,8 +667,12 @@ function paperPage(number, side, offset = 0) {
     prose.append(title);
   }
   page.dataset.textOffset = offset;
-  page.setAttribute('aria-label', `PDF page ${number}${offset ? ', continued' : ''}`);
-  page.append(prose, el('div', 'page-number', `${number}${offset ? ' · continued' : ''}`));
+  const identity = sourcePageIdentity(number, number, pageCount(), offset > 0);
+  page.setAttribute('aria-label', identity.leafDescription);
+  const pageNumber = el('div', 'page-number', `${number}${offset ? ' · continued' : ''}`);
+  pageNumber.title = identity.leafDescription;
+  pageNumber.setAttribute('aria-label', identity.leafDescription);
+  page.append(prose, pageNumber);
   return page;
 }
 function prepareLayoutProse(prose, pageLayout, number) {
@@ -1048,6 +1074,8 @@ async function flipTo(direction) {
   stopSpreadWarmup();
   const controller = new AbortController();
   turnController = controller;
+  let resolveTurn;
+  turnCompletion = new Promise(resolve => { resolveTurn = resolve; });
   const renderEpoch = epoch;
   const started = performance.now();
   // A change during spread preparation applies to the next turn.
@@ -1076,7 +1104,7 @@ async function flipTo(direction) {
     let result;
     try {
       result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
-        reducedMotion: reducedMotion.matches || fallback, duration });
+        reducedMotion: reducedMotion.matches || fallback || finishTurnsForLayout, duration });
     } finally {
       releaseFitting();
     }
@@ -1099,6 +1127,25 @@ async function flipTo(direction) {
       if (nextDirection) flipTo(nextDirection);
       else warmSpreads();
     }
+    resolveTurn();
+  }
+}
+
+// Focus changes presentation, not navigation intent. Finish a turn before the
+// geometry changes; direct jumps, modal opens and visibility changes still cancel.
+async function settlePageTurnForLayout() {
+  if (!turnController) return;
+  finishTurnsForLayout = true;
+  try {
+    while (turnController) {
+      const completed = turnCompletion;
+      for (const animation of $('book-spread').querySelector('.page-turn-leaf')?.getAnimations() || []) {
+        try { animation.finish(); } catch { /* preparation or cancellation may already own it */ }
+      }
+      await completed;
+    }
+  } finally {
+    finishTurnsForLayout = false;
   }
 }
 function navigate(number) {
@@ -1157,8 +1204,10 @@ $('text-help-button').addEventListener('click', () => {
 });
 ['pages', 'scroll'].forEach(value => $(`${value}-layout`).addEventListener('click', () => setLayout(value)));
 smallScreen.addEventListener('change', () => { flushScrollSave(); render(); });
-window.addEventListener('resize', () => {
-  cancelPageTurn();
+window.addEventListener('resize', async () => {
+  // Native fullscreen changes viewport geometry; do not discard its pending turn.
+  if (immersiveFocus.transitioning) await settlePageTurnForLayout();
+  else cancelPageTurn();
   clearTimeout(resizeTimer); resizeTimer = null;
   if (layout === 'pages' && mode === 'book') resizeTimer = setTimeout(() => { resizeTimer = null; render(); }, 160);
 }, { passive: true });
@@ -1206,18 +1255,26 @@ $('bookmark-button').addEventListener('click', async () => {
   updateControls();
   toast(present ? `Page ${page} tucked away. Find it on My shelf.` : 'Bookmark removed.');
 });
-function toggleFocus() {
-  cancelPageTurn();
+async function toggleFocus(value = !document.body.classList.contains('focus-mode')) {
+  await settlePageTurnForLayout();
   closeContents();
-  const focus = document.body.classList.toggle('focus-mode');
+  const focus = Boolean(value);
+  document.body.classList.toggle('focus-mode', focus);
   $('contents-toggle').hidden = focus;
   $('focus-button').setAttribute('aria-label', focus ? 'Leave focus mode' : 'Enter focus mode');
   $('focus-button').setAttribute('aria-pressed', String(focus));
   $('focus-button').title = focus ? 'Leave focus mode (F or Escape)' : 'Focus mode (F)';
+  document.dispatchEvent(new CustomEvent('reader-focus-change', { detail: { focus } }));
   scroller?.reflow();
   if (mode === 'book' && layout === 'pages') render();
 }
-$('focus-button').addEventListener('click', toggleFocus);
+const immersiveFocus = attachImmersiveFocus({
+  beforeChange: settlePageTurnForLayout,
+  async setFocus(value) {
+    await toggleFocus(value);
+  },
+});
+$('focus-button').addEventListener('click', () => toggleFocus());
 $('contents-toggle').addEventListener('click', () => {
   cancelPageTurn();
   const open = document.body.classList.toggle('contents-open');

@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, realpath } from 'node:fs/promises';
+import { chromium } from 'playwright';
+import { createServer } from 'vite';
+await mkdir('output/playwright/focus-exit-cue', { recursive: true });
+const output = await mkdtemp('output/playwright/focus-exit-cue/run-');
+const server = await createServer({ cacheDir: `${output}/vite-cache`, server: { host:'127.0.0.1', port:0, hmr:false, watch:null, fs:{allow:[process.cwd(),await realpath('node_modules')]} }, clearScreen:false });
+let browser;
+try {
+  await server.listen();
+  browser = await chromium.launch(process.env.BROWSER_EXECUTABLE ? { executablePath: process.env.BROWSER_EXECUTABLE } : { channel: 'chrome' });
+  const page = await browser.newPage({viewport:{width:1440,height:900}});
+  const errors=[]; page.on('pageerror', e=>errors.push(e.message));
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+  await page.locator('#book-spread[aria-busy="false"] > .paper-page').first().waitFor();
+  const cue=page.locator('#focus-exit-cue');
+  assert.equal(await cue.isVisible(),false);
+  await page.keyboard.press('f');
+  await cue.waitFor();
+  assert.equal(await cue.textContent(),'Esc to leave focus');
+  assert.equal(await cue.getAttribute('aria-hidden'),'true');
+  const box1=await page.locator('#book-spread').boundingBox();
+  assert.equal(await cue.evaluate(el=>getComputedStyle(el).pointerEvents),'none');
+  await page.screenshot({path:`${output}/cue.png`});
+  await cue.waitFor({state:'hidden',timeout:3000});
+  const box2=await page.locator('#book-spread').boundingBox();
+  assert.deepEqual(box2,box1,'cue fading shifts reading geometry');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('f');
+  await cue.waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await cue.isVisible(),false,'exit should hide cue immediately');
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.keyboard.press('f');
+  await cue.waitFor();
+  assert.equal(await cue.evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
+  // Integration contract: immersive module dispatches this event after body class changes.
+  await page.evaluate(()=> {document.body.classList.add('immersive-mode');document.dispatchEvent(new CustomEvent('reader-immersive-change',{detail:{active:true}}));});
+  assert.equal(await cue.textContent(),'Esc to leave immersive reading');
+  await page.evaluate(()=> {document.body.classList.remove('immersive-mode');document.dispatchEvent(new CustomEvent('reader-immersive-change',{detail:{active:false}}));});
+  assert.equal(await cue.textContent(),'Esc to leave focus');
+  await page.keyboard.press('Escape');
+  assert.equal(await cue.isVisible(),false);
+  assert.deepEqual(errors,[]);
+  console.log(`PASS focus exit cue: entry, 2s dwell/180ms fade, reentry, exit, fixed geometry, reduced motion, immersive event contract. ${output}`);
+} finally {await browser?.close();await server.close();}
