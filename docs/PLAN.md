@@ -1,5 +1,11 @@
 # Folio: plan and implementation pipeline
 
+## Next step: Folio → viewitpretty
+
+The public website is [viewitpretty.com](https://viewitpretty.com). Transition the product identity from Folio to viewitpretty next, while preserving existing reader behavior and saved data. This is a planned branding transition, not a completed application, repository or storage migration. The current Folio names in the implementation contracts below remain valid until deliberately migrated.
+
+See [project state and transition plan](project-state.md) for the current status, outstanding decision evidence, website/GitHub presentation checklist and primary references. Recover Carter's three previously explored options before comparing or selecting a transition approach; do not replace them with newly invented alternatives.
+
 ## Product decision
 
 A deliberately small reading room in Chrome. Folio's brand is walnut, parchment, moss, and warm brown ink: a place to slow down. Georgia book typography, quiet sans-serif controls, thin rules, subtle CSS wood grain and paper shadows. The theme requires no downloaded font or texture. No account, upload service, analytics, or AI API. PDFs are selected locally and processed inside the browser.
