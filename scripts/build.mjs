@@ -17,7 +17,9 @@ async function files(directory) {
   }
   return results;
 }
-const assets = (await files(resolve('dist'))).filter(path => path !== '/sw.js');
+// The host may consume these files instead of serving them as cacheable URLs.
+const excluded = new Set(['/sw.js', '/404.html', '/_headers', '/_redirects']);
+const assets = (await files(resolve('dist'))).filter(path => !excluded.has(path));
 await writeFile(resolve('dist/asset-list.json'), JSON.stringify(['/', ...assets]));
 const version = await assetVersion(resolve('dist'), assets);
 const worker = await readFile(resolve('dist/sw.js'), 'utf8');

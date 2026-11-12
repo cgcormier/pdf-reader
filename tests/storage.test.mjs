@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getBook, putBook, updateBook, listBooks, deleteBook } from '../src/storage.js';
+import { getBook, putBook, updateBook, setBookBookmark, listBooks, deleteBook } from '../src/storage.js';
 
 // Exercise the IndexedDB contract, including transaction completion and cursors,
 // without installing a browser or another runtime dependency.
@@ -170,6 +170,23 @@ test('versioned source anchors and rollback metadata round trip without touching
   await updateBook(id, { bookPosition, scrollPosition: { page: 3, fraction: .4, view: 'book' } });
   assert.ok(operations.slice(start).every(op => op.name === 'folio-reading-places'));
   const saved = await getBook(id); assert.deepEqual(saved.bookPosition, bookPosition); assert.deepEqual(saved.bytes, original.bytes);
+  await deleteBook(id);
+});
+
+test('page-level bookmark edits preserve legacy bookmarks and other tabs’ edits', async () => {
+  const id = 'legacy-bookmarks';
+  await putBook({ ...original, id });
+  const staleBookmarks = [3];
+  assert.deepEqual(await setBookBookmark(id, 4, true, staleBookmarks), [3, 4]);
+  await updateBook(id, { page: 2 }, { bookmarks: staleBookmarks, view: 'book', readingLayout: 'scroll' });
+  assert.deepEqual(await setBookBookmark(id, 1, true, staleBookmarks), [1, 3, 4]);
+  assert.deepEqual(await setBookBookmark(id, 3, false, staleBookmarks), [1, 4]);
+  assert.deepEqual(await setBookBookmark(id, 4, true, staleBookmarks), [1, 4]);
+  const stored = await getBook(id);
+  assert.deepEqual(stored.bookmarks, [1, 4]);
+  assert.equal(stored.page, 2);
+  assert.equal(stored.readingLayout, 'scroll');
+  assert.deepEqual(stored.bytes, original.bytes);
   await deleteBook(id);
 });
 

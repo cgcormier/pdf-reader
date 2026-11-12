@@ -8,9 +8,10 @@ import { createPageScroller } from './page-scroll.js';
 import { turnPages } from './page-turn.js';
 import { FIT_CACHE_LIMIT, paginateTextSteps, createBookPager } from './book-pagination.js';
 import { createSpreadBuffer } from './spread-buffer.js';
+import { createFitGate } from './fit-gate.js';
 import { LAYOUT_VERSION, sourceAt, offsetForSource } from './pdf-layout.js';
 import { resolveReadingPosition, readingPosition, paginateLayoutSteps, renderLayout, renderAnnotations, hasSourceChapterTitle } from './layout-reading.js';
-import { preference, savePreference, getBook, putBook, updateBook, deleteBook, listBooks } from './storage.js';
+import { preference, savePreference, getBook, putBook, updateBook, setBookBookmark, deleteBook, listBooks } from './storage.js';
 
 const $ = id => document.getElementById(id);
 // Opt-in audit sink: no text, PDF bytes, or retained production telemetry.
@@ -31,6 +32,7 @@ let fittedSpread = null;
 let spreadPreparation = null;
 let spreadWarmup = null;
 let interruptedRender = false;
+const fitGate = createFitGate();
 const fragmentCache = new Map();
 let fragmentCharacters = 0;
 const fragmentCharacterBudget = 250_000;
@@ -205,11 +207,21 @@ function ensureStructure() {
   book.structure ||= structureFromLegacy(book.chapters, pageCount());
   book.contentsExpanded ||= {};
 }
+function expandContents(path) {
+  let changed = false;
+  for (const node of path) {
+    if (book.contentsExpanded[node.id] === true) continue;
+    book.contentsExpanded[node.id] = true;
+    changed = true;
+  }
+  if (changed && !starting) persist({ contentsExpanded: book.contentsExpanded });
+  return changed;
+}
 function stopStructureScan(markCancelled = false) {
   ++structureNavigationEpoch;
   structureScan?.cancel(); structureScan = null;
   if (markCancelled && book.structure?.status === 'scanning') {
-    book.structure.status = 'cancelled'; persist();
+    book.structure.status = 'cancelled'; persist({ structure: book.structure });
   }
 }
 async function startStructureScan(fresh = false) {
@@ -220,7 +232,10 @@ async function startStructureScan(fresh = false) {
   const scan = createStructureScanner(analyzeDocumentStructure, {
     onUpdate: snapshot => {
       if (book !== target || pdf !== source) return;
+      const furnitureChanged = JSON.stringify(target.structure?.furniture ?? {}) !== JSON.stringify(snapshot.furniture ?? {});
+      if (furnitureChanged && layout === 'scroll' && mode === 'book') book.bookPosition = captureScrollAnchor(book.page) ?? book.bookPosition;
       target.structure = snapshot;
+      if (furnitureChanged) pageCache.clear();
       target.scannedPages = snapshot.scannedPages.length;
       const chapters = chaptersFromNodes(structureNodes(snapshot, source.numPages));
       const chaptersChanged = JSON.stringify(chapters) !== JSON.stringify(target.chapters);
@@ -228,12 +243,13 @@ async function startStructureScan(fresh = false) {
       // Only a complete, successful scan can rule out text in later pages.
       if (mode === 'book' && hasNoReadableText()) setMode('original');
       // Saved chapter intros and fitted leaves must follow an upgraded detector.
-      else if (chaptersChanged) void render();
-      updateContents(); updateReadingPosition(); persist();
+      else if (chaptersChanged || furnitureChanged) void render();
+      updateContents(); updateReadingPosition();
+      persist({ structure: snapshot, chapters, scannedPages: target.scannedPages });
     },
     onError: () => {
       if (book !== target) return;
-      target.structure.status = 'error'; updateContents(); persist();
+      target.structure.status = 'error'; updateContents(); persist({ structure: target.structure });
       toast('Contents scanning paused. Your reading place is kept. Try scanning again.');
     },
     onFinish: () => { if (structureScan === scan) { structureScan = null; updateContents(); } },
@@ -289,7 +305,6 @@ async function navigateStructure(node) {
   const source = pdf;
   const target = book;
   selectedStructureId = node.id;
-  for (const parent of structurePath(contentsNodes(), node.id)) book.contentsExpanded[parent.id] = true;
   let offset = 0;
   let fraction = 0;
   if (source && (node.y != null || node.kind === 'section')) {
@@ -320,6 +335,7 @@ async function navigateStructure(node) {
     } catch { /* A valid page destination remains usable without an exact text anchor. */ }
   }
   if (book !== target || pdf !== source || navigationEpoch !== structureNavigationEpoch) return;
+  expandContents(structurePath(contentsNodes(), node.id));
   navigate(node.page);
   selectedStructureId = node.id;
   if (mode === 'book') book.bookPosition = { page: node.page, offset, layoutVersion: LAYOUT_VERSION, contentsId: node.id };
@@ -353,7 +369,7 @@ function updateContents() {
       const open = book.contentsExpanded[node.id] ?? (node.kind === 'part' || path.has(node.id));
       if (children) {
         const toggle = button(open ? '▾' : '▸', 'contents-disclosure', () => {
-          book.contentsExpanded[node.id] = !open; updateContents(); persist();
+          book.contentsExpanded[node.id] = !open; updateContents(); persist({ contentsExpanded: book.contentsExpanded });
         });
         toggle.setAttribute('aria-expanded', String(open));
         toggle.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${node.title}`);
@@ -461,20 +477,22 @@ function updateControls() {
   $('navigation-hint').textContent = layout === 'scroll' ? 'Scroll at your own pace · S to flip' : mode === 'book' ? flipHint : '← → for pages · S to scroll';
   $('save-status').textContent = saved ? 'Your place is kept, automatically.' : 'Reading now. Local saving is unavailable.';
 }
-async function persist({ positionOnly = false } = {}) {
+async function persist(changes = {
+  page: book.page,
+  scrollPosition: book.scrollPosition,
+  // Original PDF navigation leaves the last Book-view anchor intact.
+  ...(mode === 'book' ? { bookPosition: book.bookPosition } : {}),
+}, defaults) {
   const id = book.id;
-  // A completed flip need not synchronously clone the whole Contents snapshot.
-  // Demo preferences replace their record, so continue saving its full metadata.
-  const metadata = structuredClone(positionOnly && id !== 'demo'
-    ? { page: book.page, view: mode, readingLayout: layout, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition }
-    : { page: book.page, view: mode, readingLayout: layout, bookmarks: book.bookmarks, chapters: book.chapters, source: book.source, scannedPages: book.scannedPages, structure: book.structure, contentsExpanded: book.contentsExpanded, scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
   savePreference('active-book', id);
   if (id === 'demo') {
-    saved = savePreference('demo', metadata);
+    // Demo preferences replace their record instead of merging changed fields.
+    saved = savePreference('demo', { page: book.page, readingLayout: layout, bookmarks: book.bookmarks,
+      scrollPosition: book.scrollPosition, bookPosition: book.bookPosition });
   } else {
     try {
       if (!bookStored) throw new Error('Book is not saved.');
-      await updateBook(id, metadata);
+      await updateBook(id, structuredClone(changes), defaults);
       if (book.id === id) saved = true;
     } catch { if (book.id === id) saved = false; }
   }
@@ -495,11 +513,7 @@ function updateReadingPosition() {
   const path = new Set(structurePath(nodes, chapter?.id).map(node => node.id));
   // Reveal the active branch when a page change enters a collapsed group.
   if (chapter && $('current-chapter').dataset.activeId !== chapter.id) {
-    let expanded = false;
-    for (const parent of structurePath(nodes, chapter.id).slice(0, -1)) {
-      if (book.contentsExpanded[parent.id] !== true) { book.contentsExpanded[parent.id] = true; expanded = true; }
-    }
-    if (expanded) updateContents();
+    if (expandContents(structurePath(nodes, chapter.id).slice(0, -1))) updateContents();
   }
   // Only the former/current branch can change its highlight during a turn.
   for (const id of new Set([...highlightedContents, ...path])) {
@@ -595,7 +609,7 @@ async function pageText(number, source = pdf) {
   if (!pageCache.has(number)) {
     if (pageCache.size >= 6) pageCache.delete(pageCache.keys().next().value);
     const started = performance.now();
-    const pending = extractPage(source, number).finally(() => readerMetric('extraction', { page: number, duration: performance.now() - started }));
+    const pending = extractPage(source, number, { furniture: book.structure?.furniture?.[number] ?? [] }).finally(() => readerMetric('extraction', { page: number, duration: performance.now() - started }));
     pageCache.set(number, pending);
     pending.catch(() => { if (pageCache.get(number) === pending) pageCache.delete(number); });
   }
@@ -759,7 +773,7 @@ function fillFragment(page, fragment) {
     });
   }
 }
-async function fitPageSteps(steps, fits, check) {
+async function fitPageSteps(steps, fits, check, signal) {
   const measured = new Map();
   let batch = performance.now(); let requests = 0;
   let step = steps.next();
@@ -771,6 +785,18 @@ async function fitPageSteps(steps, fits, check) {
       readerMetric('fit-yield', { duration: performance.now() - batch, requests });
       await new Promise(resolve => setTimeout(resolve, 0));
       check(); batch = performance.now(); requests = 0;
+    }
+    // A turn may start during the timer yield. The target was already prepared
+    // before the gate closed, so this cannot block the active turn.
+    if (fitGate.paused) {
+      readerMetric('fit-yield', { duration: performance.now() - batch, requests });
+      while (fitGate.paused) {
+        await fitGate.wait(signal);
+        check();
+      }
+      // Waiting has already yielded the main thread; do not charge animation
+      // time to the next fitting slice or trigger an unnecessary timer yield.
+      batch = performance.now(); requests = 0;
     }
     const fragment = step.value; const key = `${fragment.start}:${fragment.end}`;
     let result;
@@ -839,7 +865,7 @@ function fittedPager({ signal, renderEpoch, source }) {
           return result;
         };
         const steps = data.layout ? paginateLayoutSteps(data.layout, { signal }) : paginateTextSteps(text, { signal });
-        fragments = await fitPageSteps(steps, fits, check);
+        fragments = await fitPageSteps(steps, fits, check, signal);
       } finally { host.remove(); readerMetric('fitting-end', { page: number, aborted: signal.aborted, duration: performance.now() - fittingStarted }); }
     }
     check();
@@ -1042,15 +1068,21 @@ async function flipTo(direction) {
     const fallbackOnly = value => value.leaves.every(leaf => ['scan', 'error', 'overflow'].includes(leaf.kind));
     const fallback = fallbackOnly(fittedSpread) && fallbackOnly(spread);
     readerMetric('turn-ready', { preparation: animationStarted - started, page: spread.anchor.page, offset: spread.anchor.offset, fallback });
-    const result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
-      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches || fallback });
+    const releaseFitting = fitGate.pause();
+    let result;
+    try {
+      result = await turnPages({ stage, targetPages: pages, direction: direction === 'next' ? 'forward' : 'backward', singlePage: smallScreen.matches, signal: controller.signal,
+        reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches || fallback });
+    } finally {
+      releaseFitting();
+    }
     readerMetric('turn-animation', { duration: performance.now() - animationStarted, result });
     if (result !== 'finished' || controller.signal.aborted || renderEpoch !== epoch) return;
     // Only a completed turn changes the book or its saved source-page anchor.
     commitSpread(spread, pages);
     committed = true;
     readerMetric('turn-commit', { duration: performance.now() - started, page: spread.anchor.page, offset: spread.anchor.offset });
-    persist({ positionOnly: true });
+    persist();
   } catch {
     if (!controller.signal.aborted && renderEpoch === epoch) toast('That page needs another try. Use Next or choose its page number.');
   } finally {
@@ -1095,12 +1127,12 @@ function setMode(value) {
   if (value === 'book' && hasNoReadableText()) value = 'original';
   if (mode === value) return;
   flushScrollSave(); mode = value; render();
-  persist({ positionOnly: true });
+  persist({ view: mode });
 }
 function setLayout(value) {
   if (layout === value) return;
   flushScrollSave(); layout = value; savePreference('reading-layout', layout); render();
-  persist({ positionOnly: true });
+  persist({ readingLayout: layout });
 }
 $('book-view').addEventListener('click', () => setMode('book'));
 $('original-view').addEventListener('click', () => { if (pdf) setMode('original'); });
@@ -1142,10 +1174,33 @@ document.addEventListener('pointercancel', () => { swipeStart = null; }, { passi
 document.addEventListener('pointerdown', event => {
   if (document.body.classList.contains('contents-open') && !event.target.closest('.contents-panel, #contents-toggle')) closeContents();
 }, { passive: true });
-$('bookmark-button').addEventListener('click', () => {
-  book.bookmarks = book.bookmarks.includes(book.page) ? book.bookmarks.filter(page => page !== book.page) : [...book.bookmarks, book.page].sort((a, b) => a - b);
-  updateControls(); persist();
-  toast(book.bookmarks.includes(book.page) ? `Page ${book.page} tucked away. Find it on My shelf.` : 'Bookmark removed.');
+$('bookmark-button').addEventListener('click', async () => {
+  const target = book;
+  const page = target.page;
+  const previous = target.bookmarks;
+  const present = !previous.includes(page);
+  const optimistic = present ? [...previous, page].sort((a, b) => a - b) : previous.filter(value => value !== page);
+  target.bookmarks = optimistic;
+  updateControls();
+  if (target.id === 'demo') await persist();
+  else {
+    try {
+      if (!bookStored) throw new Error('Book is not saved.');
+      const bookmarks = await setBookBookmark(target.id, page, present, previous);
+      if (target.bookmarks === optimistic) target.bookmarks = bookmarks;
+      if (book === target) saved = true;
+    } catch {
+      if (book === target) {
+        saved = false;
+        updateControls();
+        toast('Bookmark changed for this session. Local saving is unavailable.');
+      }
+      return;
+    }
+  }
+  if (book !== target) return;
+  updateControls();
+  toast(present ? `Page ${page} tucked away. Find it on My shelf.` : 'Bookmark removed.');
 });
 function toggleFocus() {
   cancelPageTurn();
@@ -1280,7 +1335,8 @@ async function importFile(file) {
     const structure = await readDocumentStructure(candidate, { signal: controller.signal });
     if (controller.signal.aborted) return;
     const nextBook = { id: crypto.randomUUID(), title: titleFromFilename(file.name), filename: file.name, bytes, structure,
-      contentsExpanded: {}, chapters: chaptersFromNodes(structure.nodes), source: 'structure', scannedPages: 0, page: 1, bookmarks: [], addedAt: Date.now() };
+      contentsExpanded: {}, chapters: chaptersFromNodes(structure.nodes), source: 'structure', scannedPages: 0, page: 1,
+      view: 'book', readingLayout: layout, bookmarks: [], addedAt: Date.now() };
     try { await putBook(nextBook); saved = true; bookStored = true; }
     catch { saved = false; bookStored = false; toast('Your PDF is open, but the shelf could not save it. Keep the source file and choose it again next time.'); }
     flushScrollSave(); stopStructureScan(); stopReadingRender(); ++epoch; selectedStructureId = null;
@@ -1334,7 +1390,8 @@ async function loadStored(id, page) {
     installed = true;
     book.page = Math.min(pdf.numPages, Math.max(1, page || book.page || 1));
     mode = (stored.view ?? stored.scrollPosition?.view) === 'original' ? 'original' : 'book';
-    if (['pages', 'scroll'].includes(stored.readingLayout)) layout = stored.readingLayout;
+    const hasStoredLayout = ['pages', 'scroll'].includes(stored.readingLayout);
+    if (hasStoredLayout) layout = stored.readingLayout;
     selectedStructureId = !page && stored.bookPosition?.page === book.page ? stored.bookPosition.contentsId || null : null;
     if (page) {
       book.scrollPosition = { page: book.page, fraction: 0, view: mode };
@@ -1342,7 +1399,8 @@ async function loadStored(id, page) {
     }
     pageCache.clear(); saved = true; bookStored = true;
     modalCleanup = null; $('modal').close();
-    render(); persist();
+    render();
+    persist(undefined, { view: mode, readingLayout: layout, bookmarks: book.bookmarks });
   } catch (error) { if (!controller.signal.aborted) importError(error); }
   finally {
     await disposePdf(candidate);
@@ -1415,10 +1473,15 @@ $('launch-help').addEventListener('click', () => {
     showModal('Your own reading corner', content);
     return;
   }
-  content.append(el('p', 'modal-copy', 'Keep your reading room close at hand.'));
-  const list = el('ol', 'modal-copy');
-  ['Double-click “Start Folio.cmd” in the app folder. It starts the local reader and opens Chrome.', 'Run “Create shortcut.cmd” once to put a Folio launcher on your Desktop. It starts the server for you each time.', 'In Chrome, you can also bookmark this page or install Folio from the browser menu when available.'].forEach(text => list.append(el('li', '', text)));
-  content.append(list, el('p', 'inline-note', 'The Desktop launcher needs this app folder and Node.js. An installed Chrome app needs the local server or its saved offline cache. Your books stay in the same Chrome profile.'));
+  if (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+    content.append(el('p', 'modal-copy', 'Keep your reading room close at hand.'));
+    const list = el('ol', 'modal-copy');
+    ['Double-click “Start Folio.cmd” in the app folder. It starts the local reader and opens Chrome.', 'Run “Create shortcut.cmd” once to put a Folio launcher on your Desktop. It starts the server for you each time.', 'In Chrome, you can also bookmark this page or install Folio from the browser menu when available.'].forEach(text => list.append(el('li', '', text)));
+    content.append(list, el('p', 'inline-note', 'The Desktop launcher needs this app folder and Node.js. An installed Chrome app needs the local server or its saved offline cache. Your books stay in the same Chrome profile.'));
+  } else {
+    content.append(el('p', 'modal-copy', 'Bookmark this website to return to your reading room. You can also install Folio from the browser menu when that option is available.'));
+    content.append(el('p', 'inline-note', 'Your PDFs, bookmarks, and reading positions are saved in this browser profile for this website. A different address, browser profile, or the desktop app has its own shelf. Keep your original PDFs as a backup.'));
+  }
   if (installPrompt) content.append(button('Install Folio in Chrome', 'primary-button', async () => { await installPrompt.prompt(); installPrompt = null; $('modal').close(); }));
   showModal('Your own reading corner', content);
 });

@@ -1,5 +1,5 @@
 /** Deterministic, page-local interpretation. No PDF.js or DOM objects retained. */
-export const LAYOUT_VERSION = 1;
+export const LAYOUT_VERSION = 2;
 const clean = value => String(value ?? '').replace(/\s+/gu, ' ').trim();
 const median = values => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -135,15 +135,30 @@ function groupLines(runs, caps, size, width) {
   }
   const byId = new Map(runs.map(r => [r.id, r]));
   for (const [cap, target] of caps) rows.find(row => row.runs.some(r => r.id === target))?.runs.push(byId.get(cap));
+  for (const row of rows) row.runs.sort((a, b) => a.x - b.x || a.index - b.index);
+  // Require three adjacent, aligned rows so prose columns and isolated line
+  // numbers are not mistaken for cells of a table.
+  const candidate = row => row.runs.length >= 2 && row.runs.length <= 5
+    && /^[\p{L}][\p{L}\p{M}'’ -]{0,39}$/u.test(clean(row.runs[0].text))
+    && row.runs.slice(1).every(run => /^[+-]?(?:\d[\d,]*)(?:\.\d+)?%?$/.test(clean(run.text)))
+    && row.runs[1].x - row.runs[0].right > size * 3
+    && row.runs.at(-1).right < width * .83;
+  const aligned = (a, b) => candidate(a) && candidate(b) && a.runs.length === b.runs.length
+    && b.baseline - a.baseline > size * .6 && b.baseline - a.baseline <= size * 4
+    && a.runs.every((run, index) => Math.abs(run.x - b.runs[index].x) <= size);
+  for (let i = 0; i + 2 < rows.length; i++) {
+    if (aligned(rows[i], rows[i + 1]) && aligned(rows[i + 1], rows[i + 2])) {
+      rows[i].tableLike = rows[i + 1].tableLike = rows[i + 2].tableLike = true;
+    }
+  }
   const lines = [];
   for (const row of rows) {
-    row.runs.sort((a, b) => a.x - b.x || a.index - b.index);
-    row.tableLike = row.runs.filter(r => /^\d+(?:\.\d+)?$/.test(clean(r.text))).length >= 3;
+    row.tableLike ||= row.runs.filter(r => /^\d+(?:\.\d+)?$/.test(clean(r.text))).length >= 3;
     let group = [];
     for (const run of row.runs) {
       const prev = group.at(-1);
       const marginal = value => /^FTLN\s*\d+/i.test(clean(value.text));
-      if (prev && (marginal(prev) || marginal(run) || run.x - prev.right > Math.max(size * 3, width * .035))) { lines.push({ ...row, runs: group }); group = []; }
+      if (prev && (marginal(prev) || marginal(run) || !row.tableLike && run.x - prev.right > Math.max(size * 3, width * .035))) { lines.push({ ...row, runs: group }); group = []; }
       group.push(run);
     }
     if (group.length) lines.push({ ...row, runs: group });
@@ -407,7 +422,7 @@ export function conservation(layout) {
   return { valid: errors.length === 0, errors };
 }
 
-export function interpretPage(content, { pageNumber = 1, view = [0, 0, 600, 800], viewport, structTree, documentId = null, rotation = 0 } = {}) {
+export function interpretPage(content, { pageNumber = 1, view = [0, 0, 600, 800], viewport, structTree, documentId = null, rotation = 0, furniture = [] } = {}) {
   const { runs, matrix } = capture(content, { pageNumber, view, viewport });
   const width = viewport?.width ?? view[2] - view[0]; const height = viewport?.height ?? view[3] - view[1];
   const sizeRuns = runs.filter(r => clean(r.text).length > 1 && !/^FTLN|^\d+$/i.test(clean(r.text))).sort((a, b) => a.size - b.size);
@@ -417,6 +432,8 @@ export function interpretPage(content, { pageNumber = 1, view = [0, 0, 600, 800]
   const caps = initials(runs, size);
   const rawLines = groupLines(runs, caps, size, width);
   const marginal = annotationLines(rawLines, { width, height, pageNumber }, size);
+  const furnitureItems = new Set(furniture);
+  for (const line of rawLines) if (line.runs.some(run => furnitureItems.has(run.index))) marginal.set(line.id, 'running-header');
   const regions = []; const lines = orderRegions(rawLines.filter(l => !marginal.has(l.id)), size, regions, 0, width);
   const tags = taggedRoles(structTree, runs, lines);
   const blocks = makeBlocks(lines, regions, size, tags, height);

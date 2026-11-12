@@ -16,7 +16,9 @@ try {
   const page = await context.newPage(); page.setDefaultTimeout(30000);
   await page.goto(`http://127.0.0.1:${port}/`);
   await settledReader(page);
-  await waitForAsync(page, async () => Boolean(await navigator.serviceWorker.ready), undefined, { label:'offline service worker ready' });
+  await waitForAsync(page, () => Boolean(navigator.serviceWorker.controller), undefined, { label:'offline service worker controlling the page' });
+  const missingAssetStatus = await page.evaluate(async () => (await fetch('/assets/missing-folio-module.js')).status);
+  assert.equal(missingAssetStatus, 404, 'the service worker preserves the host’s missing-asset status');
   await page.locator('#file-input').setInputFiles('public/sample.pdf');
   await page.waitForFunction(() => document.querySelector('#book-title').textContent === 'sample'
     && /4 of 4/.test(document.querySelector('#chapter-note').textContent));

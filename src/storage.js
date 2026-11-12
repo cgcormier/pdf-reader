@@ -96,22 +96,43 @@ export async function listBooks() {
   });
 }
 
-export async function updateBook(id, changes) {
+export async function updateBook(id, changes, defaults = {}) {
   const allowed = new Set([
     'page', 'bookmarks', 'chapters', 'source', 'scrollPosition', 'bookPosition', 'view', 'readingLayout',
     'structure', 'contentsExpanded', 'scannedPages',
   ]);
-  const metadata = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));
+  const metadata = Object.entries(changes).filter(([key]) => allowed.has(key));
+  const initial = Object.entries(defaults).filter(([key]) => allowed.has(key));
+  await updatePlace(id, current => Object.fromEntries([
+    // First-open values must yield to any metadata another tab has already saved.
+    ...initial.filter(([key]) => current?.[key] === undefined),
+    ...metadata,
+  ]));
+}
+
+export async function setBookBookmark(id, page, present, previousBookmarks) {
+  const place = await updatePlace(id, current => {
+    // Older books can still have their bookmarks in the original PDF record.
+    const bookmarks = current?.bookmarks ?? previousBookmarks;
+    return { bookmarks: present ? [...new Set([...bookmarks, page])].sort((a, b) => a - b) : bookmarks.filter(value => value !== page) };
+  });
+  return place.bookmarks;
+}
+
+async function updatePlace(id, changes) {
   const db = await placesDatabase();
   return new Promise((resolve, reject) => {
     // Scroll saves never fetch or rewrite the source PDF bytes.
     const tx = db.transaction('places', 'readwrite');
     const store = tx.objectStore('places');
     const request = store.get(id);
+    let place;
     request.onsuccess = () => {
-      store.put(currentRecord({ ...request.result, ...metadata, id }));
+      place = currentRecord({ ...request.result, ...changes(request.result), id });
+      store.put(place);
     };
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => resolve(place);
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('Local storage transaction was cancelled.'));
   });
 }

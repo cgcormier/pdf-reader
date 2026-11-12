@@ -120,6 +120,8 @@ npm start
 
 `npm run build` bundles the app, copies PDF auxiliary assets, generates a complete offline asset list and versions the service-worker cache. `npm start` serves only `dist/`. The first production visit caches the assets for offline use; refresh after rebuilding. Dependencies are already installed and the production build is present on this machine. Source changes remain local until deliberately committed and published.
 
+For a hosted preview, serve the complete `dist/` directory at the root of a separate HTTPS origin. Missing assets should return HTTP 404. The build includes `404.html` for static hosts that use it and keeps host control files out of the offline cache list. Hosted previews have their own browser shelf. Run `node tests/bookmark-persistence.browser.mjs` and `node tests/offline.browser.mjs` after building to check bookmark isolation between tabs and the offline worker.
+
 ## Verification
 
 For the current October audit acceptance matrix, shared gate commands, retained

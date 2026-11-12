@@ -52,8 +52,8 @@ export function hasSourceChapterTitle(layout, title) {
 export function resolveReadingPosition(data, position, chapterTitle = '') {
   if (!data.layout) return { ...position };
   const projection = data.layout.projection;
-  if (position?.source && position.layoutVersion === LAYOUT_VERSION) {
-    return { ...position, offset: offsetForSource(projection, position.source) };
+  if (position?.source) {
+    return { ...position, offset: offsetForSource(projection, position.source), layoutVersion: LAYOUT_VERSION };
   }
   if (position?.layoutVersion === LAYOUT_VERSION) return { ...position, offset: Math.min(projection.text.length, Math.max(0, position.offset || 0)) };
   const oldOffset = Math.max(0, position?.offset || 0);
