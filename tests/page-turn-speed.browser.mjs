@@ -80,10 +80,10 @@ try {
   await watch(page);
   await page.goto(origin);
   await settled(page);
-  assert.equal(await value(page), '350');
+  assert.equal(await value(page), '250');
   await page.locator('#next-page').click();
   await settled(page);
-  assert.deepEqual(await animations(page, 'page-turn-leaf'), [{ target: 'page-turn-leaf', duration: 350 }]);
+  assert.deepEqual(await animations(page, 'page-turn-leaf'), [{ target: 'page-turn-leaf', duration: 250 }]);
   await page.locator('#previous-page').click();
   await settled(page);
   await page.evaluate(() => { window.speedAnimations = []; });
@@ -103,7 +103,7 @@ try {
   await page.locator(speed).press('Enter');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'page-turn-speed-range');
   await page.keyboard.press('ArrowRight');
-  await expectValue(page, 375);
+  await expectValue(page, 275);
   await page.keyboard.press('Home');
   await expectValue(page, 0);
   assert.equal(await page.locator(range).getAttribute('aria-valuetext'), 'Instant');
@@ -316,6 +316,7 @@ try {
   await watch(phone);
   await phone.goto(origin);
   await settled(phone);
+  assert.equal(await value(phone), '250', 'fresh mobile context uses the default duration');
   await phone.locator(speed).tap();
   await phone.locator(open).waitFor();
   await checkFit(phone);
@@ -333,7 +334,7 @@ try {
   }
   await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await session.detach();
-  await expectValue(phone, 400);
+  await expectValue(phone, 300);
   assert.equal(await position(phone), phonePosition);
   assert.equal(await phone.evaluate(() => scrollY), phoneScroll);
 
@@ -344,7 +345,7 @@ try {
   }
   assert.equal(await phone.locator(open).evaluate(node => node.scrollHeight > node.clientHeight), true, 'short panel cannot scroll');
   await phone.locator(`${panel} .speed-replay`).tap();
-  assert.equal((await animations(phone, 'speed-leaf')).at(-1)?.duration, 400, 'short panel preview is unreachable');
+  assert.equal((await animations(phone, 'speed-leaf')).at(-1)?.duration, 300, 'short panel preview is unreachable');
   assert.deepEqual(errors, []);
   console.log(`PASS page turn speed browser checks. Screenshots: ${run}`);
 } catch (error) {

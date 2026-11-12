@@ -124,10 +124,10 @@ async function waitForSavedPlace(page, expected) {
     });
     db.close();
     return place?.page === expected.page
-      && (!expected.view || place.view === expected.view)
+      && (!expected.view || (place.view ?? place.scrollPosition?.view) === expected.view)
       && (!expected.readingLayout || place.readingLayout === expected.readingLayout)
       && (!expected.bookmark || place.bookmarks?.includes(expected.page));
-  }, expected);
+  }, expected, { label: `saved place ${JSON.stringify(expected)}` });
 }
 
 async function forceLegacyBookPlace(page) {

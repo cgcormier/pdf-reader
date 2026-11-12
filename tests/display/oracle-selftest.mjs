@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compare, compareContents } from './oracle.mjs';
+import { compare, compareContents, comparePartial, compareTableRows } from './oracle.mjs';
 const expected = { text: 'Chapter One The story continues.', headings: ['Chapter One'] };
 const good = { ...expected, visibility: [{ ok: true }] };
 assert.deepEqual(compare(expected, good), []);
@@ -21,3 +21,11 @@ console.log('Oracle self-test: positive and injected text, role, visibility, and
 const fallback = { ...expected, introductions: ['Entire book \u2726'] };
 assert.deepEqual(compare(fallback, { ...good, introductions: ['Entire book\n\u2726'] }), []);
 assert.ok(compare(fallback, { ...good, introductions: ['Wrong title \u2726'] }).length);
+const partial = { contains: 'story continues', forbidden: ['HEADER'] };
+const partialGood = { ...good, headings: [] };
+assert.deepEqual(comparePartial(partial, partialGood), []);
+assert.ok(comparePartial(partial, { ...good, text: 'HEADER' }).length);
+assert.ok(comparePartial(partial, { ...good, visibility: [{ ok: false }] }).length);
+assert.deepEqual(compareTableRows(['Apples 12'], [{ text: 'Apples 12', singleLine: true }]), []);
+assert.ok(compareTableRows(['Apples 12'], [{ text: 'Apples 12', singleLine: false }]).length);
+assert.ok(compareTableRows(['Apples 12'], [{ text: 'Apples' }, { text: '12' }]).length);

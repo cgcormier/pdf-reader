@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as tcpServer } from 'node:net';
@@ -8,7 +9,7 @@ import { makeLayoutPdf } from '../pdf-layout-fixture.mjs';
 import { settledReader } from '../reader-capture.mjs';
 import { waitForAsync } from '../browser-wait.mjs';
 import { cases } from './fixtures.mjs';
-import { compare, compareContents } from './oracle.mjs';
+import { compare, compareContents, comparePartial, compareTableRows } from './oracle.mjs';
 
 const checkerOnly = process.argv.slice(2).length === 1 && process.argv[2] === '--checker-selftest';
 if (process.argv.length > 2 && !checkerOnly) {
@@ -16,13 +17,22 @@ if (process.argv.length > 2 && !checkerOnly) {
   process.exit(2);
 }
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+if (process.env.FOLIO_FRANKENSTEIN_PDF && !checkerOnly) {
+  const bytes = await readFile(process.env.FOLIO_FRANKENSTEIN_PDF);
+  const hash = createHash('sha256').update(bytes).digest('hex');
+  if (hash !== '2acdebda2e0111d3f5460fb3a1f63e00a617d8e6a10dfa68924081a37af6bd9a') throw new Error('Frankenstein fixture does not match the documented edition');
+  cases.push({ name: 'frankenstein-real', bytes, checked: [81, 82], partial: true,
+    expected: page => ({ contains: page === 81 ? 'the gates of the town were already shut; and' : 'I was obliged to pass the night at Secheron', forbidden: ['Chapter VI'], headings: [] }) });
+}
 const output = path.join(root, 'output/playwright/display-suite');
+const selectedCases = checkerOnly ? cases.slice(0, 1) : process.env.FOLIO_DISPLAY_CASE ? cases.filter(item => item.name === process.env.FOLIO_DISPLAY_CASE) : cases;
+if (!selectedCases.length) throw new Error(`Unknown display case: ${process.env.FOLIO_DISPLAY_CASE}`);
 await mkdir(output, { recursive: true });
 const run = await mkdtemp(path.join(output, 'run-'));
 const reserve = tcpServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
 const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
-const server = await createServer({ root, cacheDir: path.join(run, 'vite-cache'), server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null, fs: { allow: [root, await realpath(path.join(root, 'node_modules'))] } }, clearScreen: false });
-const report = { run, status: 'running', planned: checkerOnly ? 0 : cases.reduce((sum, fixture) => sum + fixture.checked.length * 4, 0), executed: 0, checkerValidation: [], cases: [], harnessErrors: [] };
+const server = await createServer({ root, cacheDir: path.join(run, 'vite-cache'), server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
+const report = { run, status: 'running', planned: checkerOnly ? 0 : selectedCases.reduce((sum, fixture) => sum + fixture.checked.length * 4, 0), executed: 0, checkerValidation: [], cases: [], harnessErrors: [] };
 let context;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const escape = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
@@ -33,7 +43,7 @@ async function saveReport() {
   await writeFile(path.join(run, 'report.html'), `<!doctype html><meta charset="utf-8"><title>Display suite</title><style>body{font:16px system-ui;max-width:1000px;margin:auto}section{border-top:1px solid #aaa;padding:1em}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#eee;padding:1em}</style><h1>Display suite</h1><p>Status: ${escape(report.status)}; executed ${report.executed} of ${report.planned} planned cases.</p><p>Expected text is a semantic reading reference, not a pixel-perfect PDF rendering.</p><p>Checker validation: ${escape(JSON.stringify(report.checkerValidation))}</p><p>Harness errors: ${escape(JSON.stringify(report.harnessErrors))}</p>${rows}`);
 }
 async function importCase(page, fixture) {
-  await page.locator('#file-input').setInputFiles({ name: `${fixture.name}.pdf`, mimeType: 'application/pdf', buffer: Buffer.from(makeLayoutPdf(fixture.pages)) });
+  await page.locator('#file-input').setInputFiles({ name: `${fixture.name}.pdf`, mimeType: 'application/pdf', buffer: fixture.bytes || Buffer.from(makeLayoutPdf(fixture.pages)) });
   await page.waitForFunction(() => !document.querySelector('#modal').open && document.querySelector('#book-type')?.textContent === 'FROM YOUR SHELF');
   await waitForAsync(page, async name => {
     const { getBook } = await import('/src/storage.js');
@@ -83,7 +93,13 @@ async function inspect(page, fixture, number, mode, viewport, contents, mutation
           const transparent = style.color === 'transparent' || /rgba\([^)]*,\s*0(?:\.0+)?\s*\)/.test(style.color);
           const ok = ancestorsVisible && !transparent && rects.length > 0 && rects.every(rect => rect.left >= box.left - 1 && rect.right <= box.right + 1 && (mode === 'scroll' || rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1));
           const ratio = parseFloat(style.fontSize) / parseFloat(getComputedStyle(prose).fontSize);
-          return { text: block.textContent, role: block.tagName.toLowerCase(), start: Number(block.dataset.layoutStart), end: Number(block.dataset.layoutEnd), ok, ratio };
+          const textRects = []; const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const textRange = document.createRange(); textRange.selectNodeContents(walker.currentNode);
+            textRects.push(...[...textRange.getClientRects()].filter(rect => rect.width && rect.height));
+          }
+          const singleLine = textRects.length > 0 && textRects.every(rect => Math.abs(rect.top - textRects[0].top) <= 1);
+          return { text: block.textContent, role: block.tagName.toLowerCase(), start: Number(block.dataset.layoutStart), end: Number(block.dataset.layoutEnd), ok, ratio, singleLine };
         });
         const intros = [...prose.querySelectorAll('.chapter-intro')].map(node => node.innerText);
         return { offset: Number(leaf.dataset.textOffset || 0), blocks, intros };
@@ -139,10 +155,11 @@ async function inspect(page, fixture, number, mode, viewport, contents, mutation
   const blocks = collected.flatMap(leaf => leaf.blocks);
   for (let i = 1; i < blocks.length; i++) if (blocks[i].start < blocks[i - 1].end || blocks[i].start - blocks[i - 1].end > 2) collectionFailures.push(`overlap or gap in displayed source ranges ${blocks[i - 1].end}�${blocks[i].start}`);
   const actual = { text: blocks.map(b => b.text).join(' '), headings: blocks.filter(b => b.role === 'h3').map(b => b.text), visibility: blocks.map(({ start, end, ok, ratio }) => ({ start, end, ok, ratio })), introductions: collected.flatMap(leaf => leaf.intros), contents };
-  const expected = { ...fixture.expected(number), contents: fixture.contents };
-  const failures = [...compare(expected, actual), ...compareContents(fixture.contents, contents.stored), ...collectionFailures];
+  const expected = { ...fixture.expected(number), ...(fixture.partial ? {} : { contents: fixture.contents }) };
+  const failures = [...(fixture.partial ? comparePartial(expected, actual) : [...compare(expected, actual), ...compareContents(fixture.contents, contents.stored)]), ...collectionFailures,
+    ...(fixture.tableRows ? compareTableRows(fixture.tableRows, blocks) : [])];
   if (blocks.some(b => b.role === 'h3' ? b.ratio < 1.15 : b.ratio > 1.15)) failures.push('heading or prose font size does not match its role');
-  if (JSON.stringify(contents.displayed) !== JSON.stringify(expected.contents.map(n => n.title))) failures.push('displayed Contents titles differ');
+  if (!fixture.partial && JSON.stringify(contents.displayed) !== JSON.stringify(expected.contents.map(n => n.title))) failures.push('displayed Contents titles differ');
   report.cases.push({ name: fixture.name, mode, viewport, page: number, expected, actual, failures, screenshots });
   console.log(`${failures.length ? 'FAIL' : 'PASS'} ${fixture.name} ${viewport} ${mode} p${number}${mutation ? ` mutation=${mutation}` : ''}: ${failures.join('; ')}`);
   return report.cases.at(-1);
@@ -152,7 +169,7 @@ try {
   await server.listen();
   context = await chromium.launchPersistentContext(path.join(run, 'profile'), { channel: process.env.FOLIO_CHROME_CHANNEL || 'chrome', headless: true, viewport: { width: 1440, height: 960 }, reducedMotion: 'reduce' });
   report.browserVersion = context.browser()?.version() || 'unavailable';
-  for (const fixture of checkerOnly ? cases.slice(0, 1) : cases) {
+  for (const fixture of selectedCases) {
     const page = await context.newPage();
     page.on('pageerror', e => report.harnessErrors.push(`${fixture.name}: ${e.message}`));
     try {
@@ -191,7 +208,7 @@ try {
 } catch (error) { report.harnessErrors.push(error.stack || error.message); }
 finally {
   await context?.close(); await server.close();
-  if (report.cases.length !== report.planned || report.checkerValidation.length !== 2 || report.harnessErrors.length) report.status = 'incomplete';
+  if (report.cases.length !== report.planned || report.checkerValidation.length !== (selectedCases.some(item => item.name === 'clean') ? 2 : 0) || report.harnessErrors.length) report.status = 'incomplete';
   else report.status = report.cases.some(c => c.failures.length) ? 'fail' : 'pass';
   await saveReport();
 }

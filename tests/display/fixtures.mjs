@@ -18,4 +18,14 @@ const edge = { name: 'top-edge', pages: [{ items: [{ text: 'Chapter 1: River Jou
 const numericLine = 'In 1842 the party walked 25 miles before the dawn.';
 const numeric = { name: 'numeric-prose', pages: [{ items: Array.from({ length: 12 }, (_, i) => ({ text: numericLine, x: 60, y: 710 - i * 15, size: 10 })) }],
   contents: [{ title: 'Entire book', page: 1, y: null }], checked: [1], expected: () => ({ text: Array(12).fill(numericLine).join(' '), headings: [], introductions: ['Entire book \u2726'] }) };
-export const cases = [book('clean'), book('combined'), book('split'), book('author'), edge, numeric];
+const fallback = [{ title: 'Entire book', page: 1, y: null }];
+const columnLines = ['Left column begins here.', 'Left column continues here.', 'Right column begins here.', 'Right column continues here.'];
+const columns = { name: 'two-columns', pages: [{ items: columnLines.map((text, i) => ({ text, x: i < 2 ? 40 : 330, y: 700 - (i % 2) * 18, size: 10 })) }],
+  contents: fallback, checked: [1], expected: () => ({ text: columnLines.join(' '), headings: [], introductions: ['Entire book ✦'] }) };
+const tableRows = ['Apples 12', 'Pears 25', 'Plums 37'];
+const table = { name: 'table', pages: [{ items: tableRows.flatMap((row, i) => {
+  const [label, value] = row.split(' '); return [{ text: label, x: 60, y: 700 - i * 25, size: 10 }, { text: value, x: 250, y: 700 - i * 25, size: 10 }];
+}) }], tableRows, contents: fallback, checked: [1], expected: () => ({ text: tableRows.join(' '), headings: [], introductions: ['Entire book ✦'] }) };
+const rotated = { name: 'rotated-page', pages: [{ rotate: 180, items: Array.from({ length: 12 }, (_, i) => ({ text: `Rotated page line ${i + 1}.`, matrix: `-1 0 0 -1 540 ${90 + i * 18}`, size: 10 })) }],
+  contents: fallback, checked: [1], expected: () => ({ text: Array.from({ length: 12 }, (_, i) => `Rotated page line ${i + 1}.`).join(' '), headings: [], introductions: ['Entire book ✦'] }) };
+export const cases = [book('clean'), book('combined'), book('split'), book('author'), edge, numeric, columns, table, rotated];

@@ -181,6 +181,29 @@ test('numeric tables and sidebars remain accounted for without invented text col
   assert.equal(result.regions.length, 1); valid(result);
 });
 
+test('aligned label and numeric cells retain separate rows and source mappings', () => {
+  const items = ['Apples', 'Pears', 'Plums', 'Peaches'].flatMap((label, index) => [
+    item(label, 60, 700 - index * 25), item(String(index + 12), 250, 700 - index * 25),
+  ]);
+  const result = layout(items);
+  assert.deepEqual(result.blocks.map(block => [block.role, text(result).slice(block.start, block.end)]), [
+    ['unknown', 'Apples 12'], ['unknown', 'Pears 13'], ['unknown', 'Plums 14'], ['unknown', 'Peaches 15'],
+  ]);
+  for (let index = 0; index < items.length; index++) {
+    const source = { item: index, offset: 0 };
+    assert.deepEqual(sourceAt(result.projection, offsetForSource(result.projection, source)), source);
+  }
+  valid(result);
+});
+
+test('isolated numbered prose and text columns are not combined into table rows', () => {
+  const numbered = layout(Array.from({ length: 3 }, (_, i) => [item('A lengthy sentence continues across this printed line.', 40, 700 - i * 15, 10, 220), item(String(i + 1), 550, 700 - i * 15)]).flat());
+  assert.ok(numbered.lines.every(line => !line.tableLike));
+  const isolated = layout([item('Apples', 60, 700), item('12', 250, 700), item('A paragraph follows.', 60, 650)]);
+  assert.ok(isolated.lines.every(line => !line.tableLike));
+  valid(numbered); valid(isolated);
+});
+
 test('indent changes, paragraph gaps and centered headings remain explicit', () => {
   const result = layout([item('Opening prose is reflowable.', 40, 700, 10, 440), item('Continuation also reflows.', 40, 686, 10, 430),
     item('An indented new paragraph.', 60, 660, 10, 400), item('Continuation at body margin.', 40, 646, 10, 440), item('Chapter 2', 230, 600, 18, 140)]);

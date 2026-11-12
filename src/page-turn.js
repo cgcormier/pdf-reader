@@ -1,4 +1,4 @@
-export const DEFAULT_PAGE_TURN_DURATION = 350;
+export const DEFAULT_PAGE_TURN_DURATION = 250;
 
 /**
  * Animate borrowed pages without duplicating their text trees. Empty placeholders

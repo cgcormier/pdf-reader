@@ -790,14 +790,16 @@ async function fitPageSteps(steps, fits, check, signal) {
       await new Promise(resolve => setTimeout(resolve, 0));
       check(); batch = performance.now(); requests = 0;
     }
-    // The requested spread is ready before this gate closes. Pause speculative
-    // fitting during the turn without blocking shared foreground preparation.
+    // The requested spread is ready before speculative fitting pauses. A turn
+    // can start during the timer yield, so wait without blocking foreground work.
     if (fitGate.paused) {
       readerMetric('fit-yield', { duration: performance.now() - batch, requests });
       while (fitGate.paused) {
         await fitGate.wait(signal);
         check();
       }
+      // Waiting has already yielded the main thread; do not charge animation
+      // time to the next fitting slice or trigger an unnecessary timer yield.
       batch = performance.now(); requests = 0;
     }
     const fragment = step.value; const key = `${fragment.start}:${fragment.end}`;
