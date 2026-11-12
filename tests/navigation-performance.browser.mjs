@@ -337,6 +337,8 @@ async function input(page) {
   }
   await size(page, 390, 19);
   await importPdf(page, 'end-source', makeFidelityPdf(Array.from({ length: 3 }, (_, i) => ({ items: [{ text: `A short source page ${i + 1}.`, y: 700 }] }))));
+  // The transient import toast covers the narrow-screen Next control.
+  await page.locator('#toast').waitFor({ state: 'hidden' });
   await jump(page, 2); await page.evaluate(() => { window.auditHold = true; window.auditAnimations = []; }); await clear(page);
   await rawClick(page, 'next-page'); await page.waitForFunction(() => window.auditAnimations.length > 0);
   await rawClick(page, 'next-page'); await release();
@@ -344,6 +346,7 @@ async function input(page) {
   assert.equal(await page.locator('#next-page').isDisabled(), true);
   report.input.push({ eof: true, events: await page.evaluate(() => window.auditEvents) });
   await importPdf(page, 'preparation-source', makeFidelityPdf(Array.from({ length: 10 }, (_, i) => ({ items: [{ text: `An exact source page ${i + 1}.`, y: 700 }] }))));
+  await page.locator('#toast').waitFor({ state: 'hidden' });
   for (const motion of ['no-preference', 'reduce']) {
     await page.emulateMedia({ reducedMotion: motion }); await jump(page); await reloadBook(page); await clear(page);
     // Delay the real PDF worker's cold text request, then send real input while
@@ -369,6 +372,7 @@ async function work(page) {
     x: 40, y: 700, ...(i === 2 ? { matrix: '.001 0 0 1 40 700' } : {}),
   }] })));
   await importPdf(page, 'dense-cooperative-source', Buffer.from(bytes));
+  await page.locator('#toast').waitFor({ state: 'hidden' });
   if (baseline) {
     await jump(page); await clear(page);
     await warm(page);
