@@ -1,12 +1,12 @@
 # Resizable Contents implementation
 
-Status: in progress on `feature/contents-panel-resize`, based on completed Contents reconstruction `45f9f87`.
+Status: implemented and validated on `feature/contents-panel-resize`, based on completed Contents reconstruction `45f9f87`.
 
 ## Shared contract
 
 The workspace grid owns `--sidebar-width`; the reader receives its remaining column. A workspace-sibling separator sits over the trailing rail edge, with a 24px target and restrained visible grip. No column transition. Desktop minimum Contents width is 260px; maximum is min(480px, workspace width minus 560px). These limits follow actual long/nested-outline and Book-page inspection by the independent UX lead. At <=820px the existing drawer replaces the columns; there is no mobile resizing gesture. The 821px boundary has a deliberately small resize range.
 
-Default width remains responsive 280/270px. A user choice is a session preference distinct from viewport-clamped effective width; persistence is not initially introduced. Keyboard Left/Right adjusts 16px, Shift adjusts 48px, Home/End reach bounds. Separator reports accessible name, orientation and current/min/max pixel widths. Escape and pointer cancellation roll back; outside release commits; unexpected capture loss commits the last width and always cleans up. Breakpoint/focus-mode interruptions clean up before the existing render.
+Default width remains responsive 280/270px. A user choice is a session preference distinct from viewport-clamped effective width; persistence is not introduced. Keyboard Left/Right adjusts 16px, Shift adjusts 48px, Home/End reach bounds. Separator reports accessible name, orientation and current/min/max pixel widths. Escape and pointer cancellation roll back; outside release commits; unexpected capture loss commits the last width and always cleans up. Breakpoint/focus-mode interruptions clean up before the existing render.
 
 Pointer updates change CSS at animation-frame cadence; Book/pages retain painted content during adjustment and refit after settling. Existing source anchors must survive repagination; scroll uses the existing source capture/restore machinery. Original PDF canvases resize through CSS without repeated rasterization. No dependencies, storage migration or second mobile gesture.
 
@@ -14,18 +14,20 @@ Pointer updates change CSS at animation-frame cadence; Book/pages retain painted
 
 Root owns this record, contract, Git checkpoints and publication. `/root/interaction` owns main.js and resize helper/unit tests. `/root/layout` owns index.html and CSS. `/root/browser` owns new browser regression infrastructure. `/root/ux` owns research and independent experience reviews in contents-resize-ux.md. Root alone starts/resumes agents; ceiling eight including root, with fresh exact-commit review capacity reserved.
 
-## Four rounds
+## Implementation rounds
 
-Each round requires implementation, actual browser observation, a UX/implementer-agreed observable refinement, reimplementation, repeated checks and independent UX verdict. Evidence will be added as completed.
+Each round requires implementation, actual browser observation, a UX/implementer-agreed observable refinement, reimplementation, repeated checks and independent UX verdict. Completed evidence is recorded below.
 
 1. Interaction: completed; sticky alignment and no-op preference refined.
 2. Responsive coherence: completed; toolbar layout and breakpoint focus refined.
 3. Robustness/accessibility: completed; bound focus, chapter opening and interruption cleanup refined.
-4. Performance/maintainability: initial no-op optimization verified; navigation and pending-frame refinements under validation.
+4. Performance/maintainability: completed; no-op fitting and pending-frame cancellation refined.
+5. Navigation during settlement: completed; newer explicit intent takes precedence.
+6. Large-outline performance: completed; inherited style invalidation reduced with exact layout preserved.
 
 ## Validation and limitations
 
-Baseline synthetic fixture: `output/playwright/contents-navigation-before-mKaDnz/`. UX width probes: `output/playwright/contents-navigation-after-Ndaxpv/`. These are synthetic documents, not evidence of arbitrary PDF behavior. Final validation and publication pending.
+Baseline synthetic fixture: `output/playwright/contents-navigation-before-mKaDnz/`. UX width probes: `output/playwright/contents-navigation-after-Ndaxpv/`. These are synthetic documents, not evidence of arbitrary PDF behavior. Final validation is recorded below; publication is verified in the delivery message.
 
 ### Round 1 completed
 
@@ -45,7 +47,7 @@ Implemented same-row Narrow/Widen pointer controls and source-aware Book/scroll 
 
 Initial profiling (`contents-resize-9yNRyQ`) showed a no-movement separator click replaced Book DOM and started fitting. Deferred resize work now begins only on effective width change; `contents-resize-itGG1X` retains DOM with zero fitting/commit events for a click. Repeated real Hamlet drags preserve painted surfaces with no fitting during drag. Observation then found cancellation before the first queued frame could flush and abort fitting without preparing later navigation. Refinement discards unpainted pending width on rollback. Independent UX `contents-navigation-after-3iOAsH` confirms modal cancellation leaves width280 and Next paints page2. No cosmetic cleanup or new dependency was justified.
 
-### Round 5: explicit navigation during resize settlement
+### Round 5 completed: explicit navigation during resize settlement
 
 Added after the user's instruction to continue until reviews find no actionable issue. Fresh review of84a7588 and actual UX `after-mLNGP6` found that Contents47 could leave stored Book source17 when a resize debounce restored an old anchor. Initial navigation interruption fixed far navigation/reload, but further tests examined queued observer/measurement and paged-turn timing. Refinement discards the superseded resize anchor, synchronizes scroll measurements before an explicit jump, clears stale lastNotified on jump, and waits for Book refitting before executing an immediate page-turn command with book/epoch/mode guards. Unit tests reproduced the pending ResizeObserver bug before the fix and cover changed height prefixes. Paged Next and newer destination supersession independently pass `after-EUK8n9`.
 
@@ -53,6 +55,28 @@ An apparent repeated near-Next failure was an invalid test premise: the focused 
 
 Corrected final behavior run `contents-resize-g2UIaI` passes53 checks/62 screenshots/no page errors. Navigation `contents-resize-1EATKo` passes all5 cases and independent review closes the stale-anchor finding. Existing Contents regression `contents-navigation-after-8FUDy6` passes37 checks/38 screenshots after correcting a fixture wait for a title inside the intentionally closed mobile drawer. Display suite `display-suite/run-Anfq9C` passes84 cases with zero product or harness failures. Ten focused helper tests pass after navigation refinements; broader source/build refresh pending final edits.
 
-### Round 6: large-outline performance (in progress)
+### Round 6 completed: large-outline performance
 
 Final isolated profile `contents-resize-gdl6Rr` passes7 functional checks/11 screenshots. No-op fitting/commits are zero. Real144-page Hamlet preserves original stored bytes and active surfaces in all4 mode/layout combinations. Six Book/page drags show framep95 16.7-17.2ms and settle334-483ms. However the synthetic632-node outline shows repeated framep95 83.3-83.4ms. This is treated as an actionable measured mismatch, not universal smoothness. A bounded diagnosis compares layout/paint costs and temporary CSS containment while preserving full attached DOM, navigation and accurate settled geometry. No product change selected yet.
+
+Controlled diagnostic `contents-resize-Yt1h9S` compared seven variants on the same PDF. Across four632-row gestures baseline style recalculation2329.6ms/layout1436ms/script17.2ms became style33.4ms/layout~1119ms after resetting unused --sidebar-width on Contents/reader branch roots. Framep95 became33.3ms across all four gestures. Direct grid updates added code without a frame benefit; layout containment did not help. Content visibility was rejected because approximate offscreen heights introduce navigation/scroll risks. Selected change is one CSS rule and a comment explaining inherited invalidation. This is a local stress-case improvement, not a universal frame-rate guarantee. Final production-code checks pending.
+
+Independent UX `contents-navigation-after-srJDG0` verifies production CSS: framep95 83.3/83.2ms before vs33.4/33.3ms after; same632 attached nodes and44305px outline height at260px, exact boundary geometry, and byte-identical480px screenshots. Filter600, Clear and Current section remain usable without moving reading page1. No additional containment/virtualization complexity is justified by this result.
+
+## Maintenance and acceptance boundaries
+
+Change bounds/defaults/keyboard increments in `src/contents-resize.js`. Interaction state and lifecycle are together at `const contentsResizer` in `src/main.js`. Grid/divider and inherited-width containment are near the workspace styles; toolbar adaptation is in the reader container query in `src/styles.css`. `src/page-scroll.js` clears obsolete resize observations on explicit jumps; its tests pin callback ordering and measured offsets. Width preference lasts this session and survives viewport clamping; no storage setting was added.
+
+Reproduce `node tests/contents-resize.browser.mjs --all` for behavior and `--perf` separately for isolated timing/real-PDF validation. `--navigation`, `--robust` and `--focus` are bounded diagnostic subsets. The harness now reserves an actual OS-assigned ephemeral port and uses a fresh browser profile; earlier Vite port0 fallback was corrected before final runs.
+
+Environment: Windows10.0.26200, Intel Core Ultra7 155U/14 logical CPUs, Chrome157.0.8103.51 headless, DPR1. Frame observations measure this machine and fixtures, not universal smoothness. Actual144-page Hamlet was checked alongside synthetic32/632-node outlines. No screen-reader speech, physical touch hardware, cross-browser engine or real OS cancellation claim is made. Chrome touch dispatch and synthetic lifecycle tests are labelled separately. Full display and Contents suites were not needlessly repeated after the isolated two-line CSS inheritance fix; the final resize matrix directly covers its geometry/theme/breakpoint impact.
+
+Actual peak active concurrency was six including root; four persistent role identities were retained and resumed, with a fresh independent reviewer for every checkpoint. Astra high handled independent UX; Sol medium handled implementation/testing, with Sol high for lifecycle-heavy exact-commit reviews. Runtime billing was not exposed. Existing budget-orchestrator, UI/UX, Playwright and pushall skills cover the workflow; skill audit found no justified update or missing capability.
+
+## Final validation and stopping decision
+
+Final `contents-resize-9YeDRm` passes53/53 behavior checks with62 screenshots and zero page errors on isolated port53706. Final isolated `contents-resize-NLAIyZ` passes7/7 profile/document checks with11 screenshots and zero errors on port56194. Synthetic632-node framep95 is33.4-33.6ms (previous83.3-83.4), maximum49.8ms, settle249-305ms. Real Hamlet Book/pages framep95 is16.7-16.9ms across six drags, settle319-390ms; other modes16.7-16.9ms, settle259-283ms. No fitting starts during any drag; Original canvases remain attached through settlement. No-movement clicks preserve Book DOM and trigger zero fitting/commit events. Dense632-node layout remains a documented~30fps stress case on this machine, while actual Hamlet is~60fps; no universal performance guarantee is implied.
+
+Final source suite282 pass/one existing skip (283 total), production build passes, focused helpers10/10. Earlier broad display84 and Contents37 checks pass as recorded above. Independent UX and owners report no remaining actionable in-scope issue or justified feature addition. Six implementation rounds were completed; final exact-commit review and remote SHA verification are recorded in the delivery message. No merge into main or deployment is authorized or performed.
+
+Checkpoint reviews: d9e60f9 and153ffd3 no actionable findings;84a7588 P2 stale-source finding resolved and independently verified;70a48b2 clean with10 focused tests. Every commit receives a fresh reviewer; final CSS/profile/record checkpoint follows the same rule. Before/after images: `contents-navigation-before-mKaDnz/before-desktop.png` and `contents-resize-9YeDRm/pointer-middle.png`; full run reports retain intermediate widths, modes, themes, touch, modal and source-anchor evidence.

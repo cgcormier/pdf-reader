@@ -273,16 +273,57 @@ painted UI and stored source to page 2/offset 0. Wider, Next, then explicit
 Contents destination 47 retained page 47/offset 0 and that destination ID. Both
 screenshots were opened; text and chapter labels matched the accepted action.
 These bounded paged checks pass. The browser lane's near-page scroll-navigation
-test and fresh overall regression gates remain before the final stopping verdict.
+test subsequently passed with the corrected live-position oracle. The preceding
+consolidated run `contents-resize-g2UIaI/` passed 53 checks, produced 62
+screenshots, and reported zero browser errors. Fresh overall gates follow the
+performance refinement below.
+
+### Round 6: Large-outline style recalculation
+
+The isolated 632-entry stress run consistently measured frame p95 around 83ms,
+compared with roughly 17ms for Hamlet. This was investigated as a real
+performance issue rather than hidden behind the successful functional checks.
+Browser CDP diagnosis (`contents-resize-Yt1h9S/`) measured 2329.6ms of style
+recalculation across four baseline gestures. Resetting the unused inherited
+`--sidebar-width` at the Contents and reader branch roots reduced that to 33.4ms
+(98.6% less); frame p95 became about 33.3ms. The selected change is one CSS rule.
+The workspace and its sibling separator still consume the width variable.
+
+Independent before/after browser probe `contents-navigation-after-srJDG0/`
+reproduced p95 83.3/83.2ms before and 33.4/33.3ms after on the same 632 nodes.
+At the 260px rail, the outline's measured scroll height remained exactly 44305px.
+During wide and narrow drags the divider center matched the boundary at 480px
+and 260px. Before/refined screenshots at 480px were visually inspected and had
+identical SHA-256 hashes. Filtering Research note 600 revealed it without changing
+reader page 1; clearing and Current section restored the visible active path.
+
+Round 6 UX verdict: the measured improvement is accepted. Dense-outline rewrap
+still costs real layout work, so this is not a universal 60fps claim. Exact DOM
+and row heights remain intact. Content visibility estimates or virtualization
+would introduce scroll/height risks without a demonstrated need; no further
+complexity or interface addition is justified by this review. The final
+`contents-resize-9YeDRm/` consolidated rerun passed 53 checks with 62 screenshots
+and zero browser errors. The isolated `contents-resize-NLAIyZ/` rerun passed all
+seven performance checks with 11 screenshots. Its dense outline p95 was
+33.4-33.6ms, settle 249-305ms; Hamlet across four modes measured 16.7-16.9ms p95,
+with Book/pages settle 319-390ms. Active surfaces stayed attached during dragging,
+and Original PDF canvases remained attached afterward. These final report totals
+were independently read by the UX reviewer.
 
 ### Continued acceptance review
 
 The user subsequently requested repeating rounds until there are no actionable
 issues and nothing justified left to add. Four rounds are therefore a minimum,
-not an automatic stopping condition. Continue bounded interaction, coherence,
-accessibility, and regression review; reject speculative features or cosmetic
-churn. Final acceptance must include fresh interruption recovery, source reading
-positions, light/dark paper, mobile/focus mode, and reduced-motion/touch evidence.
+not an automatic stopping condition. Six rounds were completed, including the
+additional navigation and measured performance refinements. The final bounded
+review found no unresolved actionable UX issue in the inspected scope and no
+justified addition. It covers source position and interruption recovery,
+light/dark paper, mobile/focus mode, reduced motion, native touch emulation,
+keyboard and single-pointer alternatives, large outlines, and the real Hamlet
+document. Stop refinement here; further speculative features or cosmetic changes
+would expand scope rather than resolve an observed need. This verdict is bounded
+by the test environment and the limits below, not a claim that every possible
+device or document has been proven defect-free.
 
 ## Limits and skill audit
 

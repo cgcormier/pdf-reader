@@ -90,6 +90,8 @@ button.shelf-spine:is(:hover, :focus-visible) .shelf-tooltip { opacity: 1; visib
 .primary-button:active { transform: translateY(1px); }
 
 .workspace { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: calc(100vh - var(--header-height) - 44px); }
+/* Only the grid and divider use this token; avoid restyling every content descendant on drag. */
+.contents-panel, .reader-panel { --sidebar-width: initial; }
 .contents-panel { grid-column: 1; grid-row: 1; }
 .reader-panel { grid-column: 2; grid-row: 1; }
 /* Share the rail's grid cell and sticky position without adding a layout column. */

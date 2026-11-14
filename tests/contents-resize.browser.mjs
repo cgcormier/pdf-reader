@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
+import { createServer as createTcpServer } from 'node:net';
 import { createServer } from 'vite';
 import { makeLayoutPdf } from './pdf-layout-fixture.mjs';
 import { settledReader, captureReader } from './reader-capture.mjs';
@@ -19,13 +20,17 @@ assert.ok(process.argv.slice(2).every(arg => ['--baseline', '--matrix', '--focus
 const root = process.cwd();
 await mkdir(path.join(root, 'output/playwright'), { recursive: true });
 const run = await mkdtemp(path.join(root, 'output/playwright/contents-resize-'));
-const server = await createServer({ root, cacheDir: path.join(run, 'vite-cache'), server: { host: '127.0.0.1', port: 0, hmr: false, watch: null }, clearScreen: false });
+const reservation = createTcpServer();
+await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+const port = reservation.address().port;
+await new Promise(resolve => reservation.close(resolve));
+const server = await createServer({ root, cacheDir: path.join(run, 'vite-cache'), server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null }, clearScreen: false });
 const report = { run, baseline, fixture: 'Synthetic 48-page PDF and nested outline; no real analyzer claims', checks: [], errors: [], screenshots: [] };
 const bytes = Array.from(makeLayoutPdf(Array.from({ length: 48 }, (_, index) => ({ items: [
   { text: `A reading companion - page ${index + 1}`, x: 50, y: 730, size: 18 },
   ...Array.from({ length: 24 }, (_, line) => ({ text: `Original fixture prose line ${line + 1} invites unhurried reading.`, x: 50, y: 690 - line * 22, size: 12 })),
 ] }))));
-let sequence = 0, context, port;
+let sequence = 0, context;
 async function fixture(page, { status = 'complete', empty = false, large = false } = {}) {
   await page.goto(`http://127.0.0.1:${port}/tests/fidelity-check.html`);
   await page.evaluate(async ({ bytes, status, empty, id, large }) => {
@@ -187,7 +192,7 @@ async function saved(page) {
   });
 }
 try {
-  await server.listen(); port = server.httpServer.address().port;
+  await server.listen(); report.origin = `http://127.0.0.1:${port}`;
   context = await chromium.launchPersistentContext(path.join(run, 'profile'), { channel: 'chrome', headless: true, reducedMotion: 'reduce', viewport: { width: 1440, height: 900 } });
   const page = await context.newPage(); page.on('pageerror', error => report.errors.push(error.message));
   await fixture(page);
