@@ -1,0 +1,82 @@
+/* Margin House / The Review. Adapted from the verified atelier contract.
+   Cosmetic only: pagination metrics, focus visibility and motion remain owned
+   by the reader. The original prototype's wider gutters are not imposed on
+   the live page surface, so switching designs cannot invalidate a reading place. */
+body[data-reader-design="margin-house"] {
+  --paper: #f4f3ef;
+  --paper-light: #fbfaf7;
+  --paper-edge: #e5e3dc;
+  --ink: #20201e;
+  --ink-soft: #51514b;
+  --ink-faint: #68685f;
+  --terracotta: #8e292b;
+  --terracotta-dark: #702023;
+  --terracotta-wash: #f0e3e1;
+  --moss: #62675c;
+  --rule: #d7d5cd;
+  --control: #f0efea;
+  background: var(--paper);
+}
+body[data-reader-design="margin-house"].dark-paper {
+  --paper: #20201e;
+  --paper-light: #292926;
+  --paper-edge: #3f3f39;
+  --ink: #f3f2ec;
+  --ink-soft: #d2d1c9;
+  --ink-faint: #b6b5aa;
+  --terracotta: #f2aaa6;
+  --terracotta-dark: #ffc4bf;
+  --terracotta-wash: #44302e;
+  --rule: #4c4c44;
+  --control: #33332e;
+}
+body[data-reader-design="margin-house"] :is(.app-header, .app-footer) {
+  background: var(--paper-light);
+  border-color: var(--rule);
+}
+body[data-reader-design="margin-house"] .contents-panel {
+  background: var(--paper-light);
+  border-color: var(--rule);
+}
+body[data-reader-design="margin-house"] :is(.brand, .book-title, .modal-heading h2) {
+  color: var(--ink);
+}
+body[data-reader-design="margin-house"] :is(.chapter-link.active, .view-button.active, .layout-button.active, .layout-button[aria-pressed="true"]) {
+  color: var(--terracotta);
+  background: var(--terracotta-wash);
+  border-color: var(--rule);
+  box-shadow: none;
+}
+body[data-reader-design="margin-house"] :is(.view-switch, .drop-zone, .page-position input) {
+  background-color: var(--control);
+  border-color: var(--rule);
+}
+body[data-reader-design="margin-house"] :is(.paper-page, .left-page, .right-page) {
+  color: var(--ink);
+  background: var(--paper-light);
+}
+body[data-reader-design="margin-house"] .page-prose { color: var(--ink); }
+body[data-reader-design="margin-house"] .shelf-item {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  box-shadow: none;
+}
+body[data-reader-design="margin-house"] .shelf-cover {
+  background: var(--ink-soft);
+  color: var(--paper-light);
+  box-shadow: none;
+}
+body[data-reader-design="margin-house"] .shelf-item:nth-child(3n + 1) .shelf-cover {
+  background: var(--terracotta);
+}
+body[data-reader-design="margin-house"] .primary-button {
+  color: #fbfaf7;
+  background: #8e292b;
+}
+body[data-reader-design="margin-house"] .primary-button:hover { background: #702023; }
+body[data-reader-design="margin-house"] ::selection {
+  color: var(--ink);
+  background: var(--terracotta-wash);
+}

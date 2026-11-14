@@ -1,0 +1,25 @@
+/* The bridge is part of the hover target, so the descending action never flickers. */
+.focus-actions { position: relative; display: inline-flex; align-items: center; }
+.focus-actions::after { content: ''; position: absolute; top: 100%; left: -8px; right: -8px; height: 12px; }
+.focus-actions .immersive-button { position: absolute; z-index: 12; top: calc(100% + 9px); right: 0; width: 36px; height: 36px; border-radius: 50%; background: var(--paper-light); box-shadow: 0 5px 16px rgb(47 36 24 / 16%); opacity: 0; visibility: hidden; transform: translateY(-9px) scale(.88); transition: opacity 150ms ease, transform 220ms cubic-bezier(.2,.8,.2,1), visibility 0s 160ms; }
+.focus-actions:hover .immersive-button, .focus-actions:focus-within .immersive-button { opacity: 1; visibility: visible; transform: translateY(0) scale(1); transition-delay: 0s; }
+.immersive-page-number { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 8; min-width: 44px; min-height: 32px; padding: 5px 12px; border: 0; border-radius: 16px; color: var(--ink); background: transparent; font: 12px/1.2 Georgia, serif; opacity: .66; cursor: pointer; }
+.immersive-page-number:hover, .immersive-page-number:focus-visible { opacity: 1; background: var(--paper-light); }
+body.immersive-mode { overflow: hidden; }
+body.immersive-mode .reader-toolbar, body.immersive-mode .reader-footer { display: none; }
+body.immersive-mode .reader-panel { height: 100dvh; min-height: 0; padding: clamp(16px, 3vh, 30px) clamp(16px, 4vw, 64px) 52px; display: flex; flex-direction: column; }
+body.immersive-mode .book-stage { flex: 1; min-height: 0; justify-content: center; }
+body.immersive-mode .book-spread { --book-height: min(960px, calc(100dvh - 84px)); filter: drop-shadow(0 24px 28px rgb(35 26 16 / 23%)) drop-shadow(0 5px 8px rgb(35 26 16 / 15%)); }
+body.immersive-mode .page-number { visibility: hidden; }
+body.immersive-mode.scroll-mode .workspace { min-height: 0; }
+body.immersive-mode.scroll-mode .scroll-stage { max-height: none; }
+body.immersive-mode .original-stage { max-height: 100%; overflow: auto; }
+@media (hover: none) { .focus-actions .immersive-button { position: static; margin-left: 3px; opacity: 1; visibility: visible; transform: none; background: transparent; box-shadow: none; } .focus-actions::after { display: none; } }
+@media (prefers-reduced-motion: reduce) { .focus-actions .immersive-button { transition: none; transform: none; } }
+/* Leave breathing room for the deeper shadow rather than clipping it. */
+body.immersive-mode:not(.scroll-mode):not(.original-mode) .book-stage { overflow: visible; }
+body.immersive-mode .book-spread { --book-height: min(940px, calc(100dvh - 116px)); }
+@media (hover: none), (pointer: coarse) {
+  .focus-actions .immersive-button { min-width: 44px; min-height: 44px; }
+  .immersive-page-number { min-height: 44px; }
+}

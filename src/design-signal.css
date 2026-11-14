@@ -1,0 +1,97 @@
+/* Signal Studio: Meridian reader / Index library.
+ * Adapted from the atelier contract, not the simulated prototype.
+ * Keep reader geometry, text metrics, turn transforms and visibility untouched. */
+body[data-reader-design="signal-studio"] {
+  --paper: #f4f6f9;
+  --paper-light: #ffffff;
+  --paper-edge: #dce2ec;
+  --ink: #111827;
+  --ink-soft: #374151;
+  --ink-faint: #536174;
+  --terracotta: #2548f4;
+  --terracotta-dark: #1734c7;
+  --terracotta-wash: #e6ebff;
+  --moss: #2548f4;
+  --rule: #cbd3df;
+  --control: #edf0f6;
+  background: var(--paper);
+}
+body[data-reader-design="signal-studio"].dark-paper {
+  --paper: #111827;
+  --paper-light: #1b2536;
+  --paper-edge: #111a29;
+  --ink: #f4f6f9;
+  --ink-soft: #d0d9e7;
+  --ink-faint: #abb9ce;
+  --terracotta: #a5b7ff;
+  --terracotta-dark: #c5d0ff;
+  --terracotta-wash: #2b385c;
+  --moss: #a5b7ff;
+  --rule: #46536a;
+  --control: #243047;
+}
+body[data-reader-design="signal-studio"] :is(.app-header, .app-footer, .contents-panel) {
+  background: var(--paper);
+  border-color: var(--rule);
+}
+body[data-reader-design="signal-studio"] :is(.brand, .book-meta h1, .modal-heading h2) {
+  color: var(--ink);
+}
+body[data-reader-design="signal-studio"] :is(.eyebrow, .small-label, .reading-caption, .chapter-page) {
+  font-variant-numeric: tabular-nums;
+}
+body[data-reader-design="signal-studio"] :is(.quiet-button, .primary-button, .icon-button, .view-button, .layout-button, .secondary-button, .chapter-link, .modal, .shelf-cover) {
+  border-radius: 0;
+}
+/* Header/dialog targets can grow without touching measured book geometry. */
+body[data-reader-design="signal-studio"] :is(.header-actions > .primary-button, .header-actions > .quiet-button, .modal .icon-button, .modal .primary-button, .modal .secondary-button) {
+  min-height: 44px;
+}
+body[data-reader-design="signal-studio"] :is(.view-switch, .drop-zone, .page-position input, .toolbar-text-size-ruler) {
+  background: var(--paper-light);
+  border-color: var(--rule);
+}
+body[data-reader-design="signal-studio"] :is(.view-button.active, .layout-button.active, .layout-button[aria-pressed="true"], .chapter-link.active) {
+  color: var(--terracotta);
+  background: var(--terracotta-wash);
+  border-color: var(--terracotta);
+  box-shadow: none;
+}
+body[data-reader-design="signal-studio"] :is(.quiet-button, .icon-button, .chapter-link):hover {
+  color: var(--terracotta);
+  background: var(--terracotta-wash);
+}
+body[data-reader-design="signal-studio"] .primary-button {
+  color: #ffffff;
+  background: #2548f4;
+}
+body[data-reader-design="signal-studio"] .primary-button:hover { background: #1734c7; }
+body[data-reader-design="signal-studio"] .count {
+  color: var(--terracotta);
+  background: var(--terracotta-wash);
+}
+body[data-reader-design="signal-studio"] .paper-page {
+  color: var(--ink);
+  background: var(--paper-light);
+}
+body[data-reader-design="signal-studio"] .left-page {
+  background: linear-gradient(90deg, var(--paper-light) 0%, var(--paper-light) 94%, var(--paper-edge) 100%);
+}
+body[data-reader-design="signal-studio"] .right-page {
+  background: linear-gradient(90deg, var(--paper-edge) 0%, var(--paper-light) 6%, var(--paper-light) 100%);
+}
+body[data-reader-design="signal-studio"] .page-prose { color: var(--ink); }
+body[data-reader-design="signal-studio"] :is(.original-stage, .scroll-original) { background: var(--control); }
+body[data-reader-design="signal-studio"] .shelf-item {
+  border-color: var(--rule);
+  border-radius: 0;
+  background: transparent;
+}
+body[data-reader-design="signal-studio"] .shelf-item .shelf-cover {
+  color: #ffffff;
+  background: #2548f4;
+  box-shadow: none;
+}
+body[data-reader-design="signal-studio"] .shelf-item:nth-child(even) .shelf-cover { background: #111827; }
+/* No theme animation or breakpoint geometry: inherit current responsive,
+ * reduced-motion, contents drag, focus and immersive behavior exactly. */

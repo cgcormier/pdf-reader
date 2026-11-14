@@ -1,0 +1,31 @@
+.header-actions .reader-design-button { min-width: 44px; min-height: 44px; flex-shrink: 0; }
+.reader-design-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow: auto; padding: 24px; border: 1px solid var(--rule); border-radius: 6px; color: var(--ink); background: var(--paper-light); box-shadow: 0 24px 80px #0005; font: 14px/1.5 var(--sans); }
+.reader-design-dialog::backdrop { background: #14181380; }
+.reader-design-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.reader-design-heading h2 { margin: 0; font: 26px/1.2 var(--serif); }
+.reader-design-close { min-width: 44px; min-height: 44px; padding: 8px; border: 1px solid var(--rule); border-radius: 3px; background: var(--control); color: var(--ink); cursor: pointer; }
+.reader-design-dialog p { color: var(--ink-soft); }
+.reader-design-options { display: grid; gap: 8px; }
+.reader-design-option { display: grid; gap: 4px; width: 100%; min-height: 64px; padding: 12px 16px; text-align: left; border: 2px solid var(--rule); border-radius: 3px; color: var(--ink); background: var(--control); cursor: pointer; font: inherit; }
+.reader-design-option strong { font-weight: 650; }
+.reader-design-option span { color: var(--ink-soft); font-size: 12px; }
+.reader-design-option[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 4px 0 0 var(--ink); }
+.reader-design-option:focus-visible, .reader-design-close:focus-visible, .reader-design-button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.reader-design-status { min-height: 1.5em; margin-bottom: 0; font-size: 12px; }
+@media (max-width: 480px) { .reader-design-dialog { padding: 16px; } .header-actions .reader-design-button { padding: 0 6px; } }
+/* The extra design trigger must not push existing header actions off a phone. */
+@media (max-width: 500px) {
+  .app-header .header-actions .shelf-shortcut { gap: 0; }
+  .app-header .header-actions .shelf-invitation-line {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+}
+@media (max-width: 380px) {
+  .app-header .brand svg { display: none; }
+  .app-header .header-actions .shelf-shortcut { --shelf-unit: .5px; }
+}
+/* Small page furniture follows each direction's contrast-tested muted ink. */
+body:is([data-reader-design="margin-house"], [data-reader-design="signal-studio"], [data-reader-design="common-ground"]) :is(.page-running-header, .page-number) {
+  color: var(--ink-faint);
+  border-color: var(--rule);
+}

@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import { mkdir, realpath } from 'node:fs/promises';
+import { chromium } from 'playwright';
+import { createServer } from 'vite';
+const out='output/playwright/immersive-focus'; await mkdir(out,{recursive:true});
+const server=await createServer({server:{host:'127.0.0.1',port:0,fs:{allow:[process.cwd(),await realpath('node_modules')]}},clearScreen:false});
+let browser; const errors=[];
+try {
+ await server.listen(); browser=await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE || '/usr/bin/chromium'});
+ const page=await browser.newPage({viewport:{width:1440,height:900}}); page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+ await page.locator('#book-spread[aria-busy="false"] > .paper-page').first().waitFor();
+ await page.locator('#focus-button').hover();
+ await page.waitForTimeout(260);
+ assert.equal(await page.locator('#immersive-button').evaluate(el=>getComputedStyle(el).opacity),'1');
+ const hoverBox=await page.locator('#immersive-button').boundingBox();
+ await page.mouse.move(hoverBox.x+hoverBox.width/2,hoverBox.y+hoverBox.height/2);
+ await page.waitForTimeout(200); assert.equal(await page.locator('#immersive-button').evaluate(el=>getComputedStyle(el).opacity),'1');
+ await page.locator('#immersive-button').click();
+ await page.waitForFunction(()=>document.body.classList.contains('immersive-mode'));
+ await page.waitForTimeout(700);
+ assert.equal(await page.locator('.reader-toolbar').isVisible(),false);
+ assert.equal(await page.locator('.reader-footer').isVisible(),false);
+ assert.equal(await page.locator('#immersive-page-number').isVisible(),true);
+ assert.equal(await page.locator('.paper-page .page-number').first().isVisible(),false);
+ assert.equal(await page.evaluate(()=>!!document.fullscreenElement),true);
+ await page.screenshot({path:`${out}/immersive-desktop.png`});
+ await page.keyboard.press('Escape'); await page.waitForFunction(()=>!document.body.classList.contains('immersive-mode'));
+ assert.equal(await page.locator('#focus-button').isVisible(),true);
+ await page.locator('#focus-button').focus(); await page.keyboard.press('Tab');
+ assert.equal(await page.evaluate(()=>document.activeElement.id),'immersive-button');
+ // Explicitly reject native fullscreen: the same control remains useful in-viewport.
+ await page.evaluate(()=>document.documentElement.requestFullscreen=()=>Promise.reject(new Error('test denial')));
+ await page.keyboard.press('Enter'); await page.waitForFunction(()=>document.body.classList.contains('immersive-mode'));
+ await page.locator('#immersive-page-number').click(); await page.waitForFunction(()=>!document.body.classList.contains('immersive-mode'));
+ await page.emulateMedia({reducedMotion:'reduce'}); await page.locator('#focus-button').hover();
+ assert.equal(await page.locator('#immersive-button').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
+ const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+ await mobile.goto(`http://127.0.0.1:${server.httpServer.address().port}`); await mobile.locator('#immersive-button').waitFor();
+ await mobile.locator('#immersive-button').tap(); await mobile.waitForFunction(()=>document.body.classList.contains('immersive-mode'));
+ await mobile.waitForTimeout(700); await mobile.screenshot({path:`${out}/immersive-mobile.png`});
+ assert.ok(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await mobile.locator('#immersive-page-number').tap(); await mobile.waitForFunction(()=>!document.body.classList.contains('immersive-mode'));
+ assert.deepEqual(errors,[]); console.log('PASS immersive hover bridge, fullscreen, fallback, exit, keyboard, reduced motion, touch');
+} finally { await browser?.close(); await server.close(); }

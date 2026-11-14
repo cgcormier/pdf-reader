@@ -1,0 +1,11 @@
+.contents-panel { translate: var(--contents-offset, 0px) 0; z-index: 21; background-color: var(--paper); }
+.contents-drag-handle { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; color: var(--ink-soft); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: grab; touch-action: none; user-select: none; font: 20px var(--sans); }
+.contents-drag-handle:hover { border-color: var(--rule); }
+.contents-drag-handle:focus-visible { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
+.contents-dragging .contents-drag-handle { cursor: grabbing; }
+.contents-drag-help { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (pointer: coarse) { .contents-drag-handle { width: 44px; height: 44px; } }
+/* A displaced drawer still slides entirely offscreen when closed. */
+@media (max-width: 820px) {
+  body:not(.contents-open) .contents-panel { transform: translateX(calc(-105% - var(--contents-offset, 0px))); }
+}
