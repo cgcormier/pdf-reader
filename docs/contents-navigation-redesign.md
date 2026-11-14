@@ -2,9 +2,9 @@
 
 ## Status
 
-This is the agreed implementation contract, not a claim that the redesign has
-passed validation. The baseline suite passed 274 tests with one existing skip.
-Implementation and rendered acceptance evidence will be recorded below.
+The reconstruction is implemented. The contract below records its intended
+behavior; the final section distinguishes verified checks from remaining checks.
+The baseline source suite passed 274 tests with one existing skip.
 
 ## Direction
 
@@ -104,4 +104,69 @@ do not reset the worktree or remove saved user data.
 
 ## Verified implementation
 
-Pending implementation and review.
+The running index, temporary title filter, Current section reveal, analysis
+disclosure, compact import area, and mobile focus isolation are implemented.
+Parent indexing/filtering lives in `src/contents-navigation.js`; navigation,
+scanner lifecycle, and persistence remain in `src/main.js`. Deep hierarchy keeps
+its semantic nesting while visual indentation stops growing after three levels.
+At very short heights, the whole rail can scroll to keep controls reachable.
+
+The browser test is standalone and uses an isolated origin/profile:
+
+```powershell
+node tests/contents-navigation.browser.mjs
+```
+
+The 2026-11-14 run in
+`output/playwright/contents-navigation-after-9f86QT/` passed 33 asserted cases plus
+three geometry snapshots, with 37 screenshots and no page errors. It covers 24
+viewport/mode/layout/theme combinations; filtering and expansion restoration;
+Current section without changing reading position; mobile focus containment,
+Escape/outside/navigation close, breakpoint cleanup; and normal/reduced motion.
+Visible glyph-region checks supplement geometry to catch blank painted content.
+Desktop, short desktop, mobile, dark paper, search, and lifecycle screenshots were
+visually inspected, including an independent orchestration review.
+
+At 1000x420 the initial outline viewport measured 144px with two fully visible
+rows and reachable utility controls. The synthetic 632-node outline loaded and
+settled in 1664ms; filtering to a visible match took 30ms on this run. These are
+local observations, not portable performance guarantees.
+
+Scanning, stop/resume, and error UI checks intercept the served analyzer only
+inside the isolated test browser, exercising real lifecycle callbacks. They do
+not establish that a real PDF scan failed. The reduced-motion regression exposed
+inherited visibility transitions that left drawer descendants temporarily hidden;
+zero transition duration and transform-only drawer motion now permit immediate
+focus and painted contents without timer workarounds.
+
+Three pure-helper tests pass, including a 10,000-node hierarchy. On reconstruction
+commit `5812fe8`, `npm.cmd test` passed 277 tests with one existing skip (278 total),
+and `npm.cmd run build` passed. `npm.cmd run test:display` passed all 84 planned
+reader cases with no product failures or harness errors; its report is
+`output/playwright/display-suite/run-23K2JC/report.html`.
+
+Fresh reviews found no blockers in the contract (`c5a9899`) or pure-helper
+(`ca54dda`) commits. Each checkpoint receives a fresh independent review before
+branch publication. No dependency, storage schema, PDF interpretation, or
+saved-book migration was introduced.
+
+The fresh interface review found that clicking inside Reading corner help could
+close the mobile drawer behind the dialog and lose the return-focus target.
+Outside dismissal now ignores clicks while that dialog is open. The reviewer
+independently verified help click/close/Escape with normal and reduced motion:
+the drawer stays open, closing help returns focus to its launcher, and Escape
+returns focus to Contents with no background left inert. This small follow-up
+was checked separately from the source/build/display baseline above.
+The durable regression runs in both the full suite and the bounded command
+`node tests/contents-navigation.browser.mjs --probe`. The follow-up probe in
+`output/playwright/contents-navigation-after-nEV8NS/` passed 13 assertions plus
+three snapshots with 16 screenshots and no errors. The unaffected full matrix was
+not rerun after this guard; the production build was rerun successfully.
+
+The requested Astra low orchestrator synthesized two Luna xhigh brainstorming
+lanes. Sol medium handled implementation, architecture, browser infrastructure,
+and bounded reviews; the interface review uses Sol high for cross-file focus and
+persistence risks. Peak active concurrency was seven, below the authorized eight.
+Current model billing was not measured. The existing `budget-orchestrator` and
+`ui-ux-pro-max` skills covered this workflow; the skill audit found no update
+necessary because no new reusable skill behavior was required.

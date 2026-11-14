@@ -1281,7 +1281,8 @@ document.addEventListener('pointerup', event => {
 }, { passive: true });
 document.addEventListener('pointercancel', () => { swipeStart = null; }, { passive: true });
 document.addEventListener('pointerdown', event => {
-  if (document.body.classList.contains('contents-open') && !event.target.closest('.contents-panel, #contents-toggle')) closeContents();
+  if (!$('modal').open && document.body.classList.contains('contents-open')
+    && !event.target.closest('.contents-panel, #contents-toggle')) closeContents();
 }, { passive: true });
 $('bookmark-button').addEventListener('click', async () => {
   const target = book;
