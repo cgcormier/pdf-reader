@@ -85,6 +85,7 @@ function toast(message) {
   toastTimer = setTimeout(() => { $('toast').hidden = true; }, 5500);
 }
 function showModal(title, content, cleanup = null) {
+  interruptContentsResize();
   cancelPageTurn();
   if ($('modal').open) $('modal').close();
   modalCleanup = cleanup;
@@ -766,6 +767,8 @@ function captureScrollAnchor(number) {
   const node = nodes.find(n => n.getBoundingClientRect().bottom > readingY) ?? nodes.at(-1);
   if (!node) return null;
   const box = node.getBoundingClientRect();
+  // Chapter decoration above the first source line has no text anchor to restore.
+  if (box.top > readingY) return null;
   const y = Math.max(box.top + 1, Math.min(box.bottom - 1, readingY));
   const caret = document.caretRangeFromPoint?.(box.left + Math.min(18, box.width / 4), y);
   let offset = Number(node.dataset.layoutStart);
@@ -1035,6 +1038,7 @@ function commitSpread(spread, pages, place = spread.anchor) {
   updateReadingPosition();
 }
 async function render() {
+  interruptContentsResize();
   interruptedRender = false;
   stopReadingRender();
   if (mode === 'book' && hasNoReadableText()) mode = 'original';
@@ -1258,6 +1262,7 @@ const contentsWorkspace = contentsResizer.parentElement;
 let preferredContentsWidth = null;
 let contentsDrag = null;
 let contentsResizerFocused = false;
+let contentsResizeAnchor = null;
 let contentsWidthFrame = null;
 let pendingContentsWidth = null;
 const contentsResizeEnabled = () => !smallScreen.matches && !document.body.classList.contains('focus-mode');
@@ -1271,6 +1276,8 @@ function applyContentsWidth(width = preferredContentsWidth) {
   contentsResizer.setAttribute('aria-valuemax', bounds.max);
   contentsResizer.setAttribute('aria-valuenow', effective);
   contentsResizer.setAttribute('aria-valuetext', `${effective} pixels`);
+  $('contents-narrower').setAttribute('aria-disabled', String(effective <= bounds.min));
+  $('contents-wider').setAttribute('aria-disabled', String(effective >= bounds.max));
   return effective;
 }
 function flushContentsWidth() {
@@ -1283,6 +1290,8 @@ function beginContentsResize() {
   clearTimeout(resizeTimer); resizeTimer = null;
   if (contentsResizeActive) return;
   contentsResizeActive = true;
+  contentsResizeAnchor = mode === 'book' && layout === 'scroll'
+    ? { book, scroller, position: captureScrollAnchor(book.page) } : null;
   cancelPageTurn();
   if (mode === 'book' && layout === 'pages') {
     // Keep the painted spread while preventing old-width fitting from committing.
@@ -1294,7 +1303,26 @@ function beginContentsResize() {
 function settleContentsResize({ renderReader = true } = {}) {
   clearTimeout(resizeTimer); resizeTimer = null;
   contentsResizeActive = false;
+  const anchor = contentsResizeAnchor;
+  contentsResizeAnchor = null;
+  if (anchor?.position && anchor.book === book && anchor.scroller === scroller && mode === 'book' && layout === 'scroll') {
+    book.bookPosition = anchor.position;
+    restoreScrollAnchor(anchor.position);
+  }
   if (renderReader && mode === 'book' && layout === 'pages') render();
+}
+function interruptContentsResize() {
+  if (!contentsResizeActive) return;
+  finishContentsDrag({ rollback: true, renderReader: false });
+  settleContentsResize({ renderReader: false });
+  if (mode === 'book' && layout === 'pages') interruptedRender = true;
+}
+function adjustContentsWidth(next) {
+  const width = Number(contentsResizer.getAttribute('aria-valuenow'));
+  if (next === width) return;
+  beginContentsResize();
+  preferredContentsWidth = next; applyContentsWidth();
+  resizeTimer = setTimeout(() => settleContentsResize(), 160);
 }
 function finishContentsDrag({ rollback = false, renderReader = true } = {}) {
   if (!contentsDrag) return;
@@ -1346,11 +1374,15 @@ contentsResizer.addEventListener('keydown', event => {
   const next = contentsWidthKey(event.key, width, contentsWidthBounds(workspaceWidth()), event.shiftKey);
   if (next === null) return;
   event.preventDefault();
-  if (next === width) return;
-  beginContentsResize();
-  preferredContentsWidth = next; applyContentsWidth();
-  resizeTimer = setTimeout(() => settleContentsResize(), 160);
+  adjustContentsWidth(next);
 });
+for (const [id, key] of [['contents-narrower', 'ArrowLeft'], ['contents-wider', 'ArrowRight']]) {
+  $(id).addEventListener('click', () => {
+    if (!contentsResizeEnabled() || $(id).getAttribute('aria-disabled') === 'true') return;
+    adjustContentsWidth(contentsWidthKey(key, Number(contentsResizer.getAttribute('aria-valuenow')),
+      contentsWidthBounds(workspaceWidth())));
+  });
+}
 window.addEventListener('blur', () => finishContentsDrag());
 contentsResizer.addEventListener('focus', () => { contentsResizerFocused = true; });
 contentsResizer.addEventListener('blur', () => {
@@ -1466,10 +1498,10 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { cancelPageTurn(); flushScrollSave(); }
+  if (document.visibilityState === 'hidden') { interruptContentsResize(); cancelPageTurn(); flushScrollSave(); }
   else resumeInterruptedRender();
 });
-window.addEventListener('pagehide', () => { cancelPageTurn(); flushScrollSave(); });
+window.addEventListener('pagehide', () => { interruptContentsResize(); cancelPageTurn(); flushScrollSave(); });
 
 function loadingDialog(controller) {
   const content = el('div', 'loading-block');

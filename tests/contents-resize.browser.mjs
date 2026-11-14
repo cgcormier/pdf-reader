@@ -10,7 +10,8 @@ import { settledReader, captureReader } from './reader-capture.mjs';
 const baseline = process.argv.includes('--baseline');
 const matrix = process.argv.includes('--matrix');
 const focus = process.argv.includes('--focus');
-assert.ok(process.argv.slice(2).every(arg => ['--baseline', '--matrix', '--focus'].includes(arg)), 'Only --baseline and --matrix are supported');
+const robust = process.argv.includes('--robust');
+assert.ok(process.argv.slice(2).every(arg => ['--baseline', '--matrix', '--focus', '--robust'].includes(arg)), 'Only --baseline, --matrix, --focus and --robust are supported');
 const root = process.cwd();
 await mkdir(path.join(root, 'output/playwright'), { recursive: true });
 const run = await mkdtemp(path.join(root, 'output/playwright/contents-resize-'));
@@ -77,6 +78,33 @@ async function shot(page, name, { mid = false } = {}) {
   const details = { file, geometry: await geometry(page), reader };
   report.screenshots.push(details); return details;
 }
+async function scrollSource(page) {
+  return page.evaluate(async () => {
+    const stage = document.querySelector('#scroll-stage'), number = Number(document.querySelector('#page-input').value);
+    const leaf = stage.querySelector(`[data-source-page="${number}"]`), layout = leaf?.layoutModel;
+    if (!layout) throw new Error('No source layout at scroll reading page');
+    const readingY = stage.getBoundingClientRect().top + 18;
+    const nodes = [...leaf.querySelectorAll('[data-layout-start]')];
+    const node = nodes.find(node => node.getBoundingClientRect().bottom > readingY) ?? nodes.at(-1);
+    const box = node.getBoundingClientRect(), caret = document.caretRangeFromPoint(box.left + Math.min(18, box.width / 4), Math.max(box.top + 1, Math.min(box.bottom - 1, readingY)));
+    let offset = Number(node.dataset.layoutStart);
+    if (caret && node.contains(caret.startContainer)) { const range = document.createRange(); range.selectNodeContents(node); range.setEnd(caret.startContainer, caret.startOffset); offset += range.toString().length; }
+    const { sourceAt } = await import('/src/pdf-layout.js');
+    return { page: number, offset, source: sourceAt(layout.projection, offset), excerpt: layout.projection.text.slice(offset, offset + 80) };
+  });
+}
+async function scrollFraction(page) {
+  return page.evaluate(() => {
+    const stage = document.querySelector('#scroll-stage'), number = Number(document.querySelector('#page-input').value);
+    const leaf = stage.querySelector(`[data-source-page="${number}"]`), box = leaf.getBoundingClientRect();
+    return { page: number, fraction: Math.max(0, Math.min(1, (stage.getBoundingClientRect().top + 16 - box.top) / box.height)) };
+  });
+}
+
+async function gotoSource(page, number) {
+  await page.locator('#page-input').fill(String(number)); await page.locator('#page-input').press('Enter'); await settledReader(page, number);
+}
+
 async function inspectControls(page) {
   return page.evaluate(() => {
     const issues = [], controls = [...document.querySelectorAll('.reader-toolbar button, .reader-footer button, .reader-footer input')].filter(node => node.checkVisibility());
@@ -132,7 +160,7 @@ try {
     }
   } else {
     await page.locator('#contents-resizer').waitFor({ state: 'visible' });
-    if (!focus) {
+    if (!focus && !robust) {
     await check('pointer width follows during drag and remains after release', async () => {
       const before = await width(page), after = await drag(page, 96, 'pointer-middle');
       assert.ok(Math.abs(after.sidebar.width - before - 96) < 2, JSON.stringify(after));
@@ -220,6 +248,7 @@ try {
     });
 
     }
+    if (!robust) {
     await check('focused separator crossing mobile breakpoint returns focus to Contents', async () => {
       await page.setViewportSize({ width: 1000, height: 640 }); await settledReader(page); await page.locator('#contents-resizer').focus();
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'contents-resizer', 'Separator was not focused before crossing');
@@ -243,6 +272,7 @@ try {
       await page.setViewportSize({ width: 1440, height: 900 }); await settledReader(page);
     });
 
+    }
     if (matrix) {
       await fixture(page);
       for (const [viewport, size] of [['narrow', { width: 821, height: 900 }], ['short', { width: 1000, height: 420 }], ['wide', { width: 1440, height: 900 }]]) {
@@ -257,6 +287,113 @@ try {
           });
         }
       }
+    }
+
+    if (robust) {
+      await fixture(page); await page.setViewportSize({ width: 1440, height: 900 });
+
+      await check('Book scroll top preserves chapter decoration while resizing', async () => {
+        await page.locator('#book-view').click(); await page.locator('#scroll-layout').click(); await gotoSource(page, 1);
+        await page.locator('#scroll-stage').evaluate(stage => { stage.scrollTop = 0; }); await settledReader(page);
+        const before = await page.locator('#scroll-stage').evaluate(stage => ({ scroll: stage.scrollTop, title: stage.querySelector('.chapter-title').getBoundingClientRect().y }));
+        await page.locator('#contents-resizer').press('Home'); await settledReader(page);
+        const after = await page.locator('#scroll-stage').evaluate(stage => ({ scroll: stage.scrollTop, title: stage.querySelector('.chapter-title').getBoundingClientRect().y }));
+        await shot(page, 'top-decoration-after');
+        assert.ok(Math.abs(after.scroll - before.scroll) <= 2 && Math.abs(after.title - before.title) <= 2, JSON.stringify({ before, after })); return { before, after };
+      });
+      await check('Book scroll preserves logical source while width changes', async () => {
+        await page.locator('#book-view').click(); await page.locator('#scroll-layout').click(); await page.locator('#contents-resizer').press('Home'); await settledReader(page);
+        await gotoSource(page, 17); await page.locator('#scroll-stage').evaluate(stage => { stage.scrollTop += 400; }); await settledReader(page);
+        const before = await scrollSource(page), stored = await saved(page); await shot(page, 'source-scroll-before');
+        await drag(page, 220, 'source-scroll-mid'); const after = await scrollSource(page); await shot(page, 'source-scroll-after');
+        assert.equal(after.page, before.page); assert.ok(Math.abs(after.offset - before.offset) <= 80, `Source jumped: ${JSON.stringify({ before, after, stored })}`);
+        return { before, after };
+      });
+      await check('Book pages preserves a continuation anchor after live and settled resizing', async () => {
+        await page.locator('#pages-layout').click(); await page.locator('#contents-resizer').press('Home'); await settledReader(page); await gotoSource(page, 17);
+        await page.locator('#next-page').click(); await settledReader(page); const before = await saved(page); await shot(page, 'source-pages-before');
+        await drag(page, 220, 'source-pages-mid'); const after = await saved(page); await shot(page, 'source-pages-after');
+        assert.equal(after.page, before.page); assert.deepEqual(after.bookPosition, before.bookPosition); assert.deepEqual(after.bookmarks, [7, 19]);
+        return { before, after };
+      });
+      await check('Original pages preserves source page and Book anchor across resizing', async () => {
+        const anchor = (await saved(page)).bookPosition; await page.locator('#original-view').click(); await gotoSource(page, 17);
+        await page.locator('#contents-resizer').press('Home'); await settledReader(page); await drag(page, 220, 'original-pages-mid');
+        const after = await saved(page); assert.equal(after.page, 17); assert.deepEqual(after.bookPosition, anchor); assert.deepEqual(after.bookmarks, [7, 19]);
+        return shot(page, 'original-pages-after');
+      });
+      await check('Original scroll keeps normalized source position', async () => {
+        await page.locator('#scroll-layout').click(); await page.locator('#contents-resizer').press('Home'); await settledReader(page); await gotoSource(page, 17);
+        await page.locator('#scroll-stage').evaluate(stage => { stage.scrollTop += 300; }); await settledReader(page);
+        await page.locator('#bookmark-button').click(); await page.locator('#bookmark-button').click();
+        const before = await scrollFraction(page); await drag(page, 220, 'original-scroll-mid');
+        await page.locator('#bookmark-button').click(); await page.locator('#bookmark-button').click(); const after = await scrollFraction(page);
+        assert.equal(after.page, before.page); assert.ok(Math.abs(after.fraction - before.fraction) < .03, JSON.stringify({ before, after }));
+        await shot(page, 'original-scroll-after'); return { before, after };
+      });
+
+      await check('pointer buttons work without dragging at both bounds', async () => {
+        await page.locator('#contents-resizer').press('Home'); await settledReader(page);
+        assert.equal(await page.locator('#contents-narrower').getAttribute('aria-disabled'), 'true');
+        await page.locator('#contents-wider').click(); assert.equal(Math.round(await width(page)), 276);
+        await page.locator('#contents-narrower').click(); assert.equal(Math.round(await width(page)), 260);
+        assert.equal(await page.evaluate(() => document.activeElement?.id), 'contents-narrower');
+        await page.locator('#contents-narrower').press('Enter'); assert.equal(Math.round(await width(page)), 260);
+        await page.locator('#contents-resizer').press('End'); await settledReader(page);
+        assert.equal(await page.locator('#contents-wider').getAttribute('aria-disabled'), 'true');
+        await page.locator('#contents-narrower').click(); assert.equal(Math.round(await width(page)), 464);
+        await page.locator('#contents-wider').click(); assert.equal(Math.round(await width(page)), 480);
+        assert.equal(await page.evaluate(() => document.activeElement?.id), 'contents-wider');
+        await page.locator('#contents-wider').press('Enter'); assert.equal(Math.round(await width(page)), 480);
+        const sourcePage = await page.locator('#page-input').inputValue(); await page.keyboard.press('ArrowRight');
+        assert.equal(await page.locator('#page-input').inputValue(), sourcePage);
+        await settledReader(page); return shot(page, 'pointer-buttons');
+      });
+      for (const motion of ['reduce', 'no-preference']) await check(`modal interrupt clears active resize ${motion}`, async () => {
+        await page.emulateMedia({ reducedMotion: motion }); await page.locator('#contents-resizer').press('Home'); await settledReader(page);
+        const box = await page.locator('#contents-resizer').boundingBox(); await page.mouse.move(box.x + box.width / 2, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 120, box.y + 100, { steps: 6 });
+        await page.locator('#launch-help').evaluate(node => node.click()); await page.locator('#modal[open]').waitFor();
+        const resizing = (await geometry(page)).resizing; await page.mouse.up();
+        await page.locator('#modal-close').click(); await settledReader(page); await shot(page, `modal-interrupt-${motion}`);
+        assert.equal(resizing, false, 'Opening help left drag active behind modal'); assert.equal((await geometry(page)).resizing, false);
+      });
+      await check('native touch pointer changes width and releases cleanly', async () => {
+        await page.locator('#contents-resizer').press('Home'); await settledReader(page);
+        const before = await width(page), box = await page.locator('#contents-resizer').boundingBox(), cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+        const x = box.x + box.width / 2, y = box.y + 100;
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+        for (let step = 1; step <= 6; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + step * 16, y }] });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }); await cdp.detach(); await settledReader(page);
+        assert.ok(Math.abs(await width(page) - before - 96) <= 2); assert.equal((await geometry(page)).resizing, false); return shot(page, 'touch-after');
+      });
+
+      await check('synthetic visibility interruption clears pointer interaction', async () => {
+        await page.locator('#contents-resizer').press('Home'); await settledReader(page);
+        const box = await page.locator('#contents-resizer').boundingBox(); await page.mouse.move(box.x + box.width / 2, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 90, box.y + 100);
+        await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
+        const active = (await geometry(page)).resizing;
+        await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); }); await page.mouse.up(); await settledReader(page);
+        assert.equal(active, false); return { mechanism: 'Synthetic hidden/visible lifecycle events against actual pointer interaction', geometry: await geometry(page) };
+      });
+      await check('pointer breakpoint crossing clears capture cursor and inert state', async () => {
+        const box = await page.locator('#contents-resizer').boundingBox(); await page.mouse.move(box.x + box.width / 2, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 90, box.y + 100);
+        await page.setViewportSize({ width: 390, height: 640 }); await page.mouse.up(); await settledReader(page);
+        assert.equal((await geometry(page)).resizing, false); assert.equal(await page.locator('[inert]').count(), 0);
+        await page.locator('#contents-toggle').click(); await page.locator('#launch-help').click(); await page.locator('#modal-close').click(); await page.keyboard.press('Escape');
+        assert.equal(await page.locator('[inert]').count(), 0); await page.setViewportSize({ width: 1440, height: 900 }); await settledReader(page);
+      });
+      await check('synthetic pointercancel rolls back and unexpected lost capture commits', async () => {
+        await page.locator('#contents-resizer').press('Home'); await settledReader(page); const handle = page.locator('#contents-resizer');
+        const before = await width(page), box = await handle.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 130, box.y + 100, { steps: 6 });
+        await handle.dispatchEvent('pointercancel', { pointerId: 1, pointerType: 'mouse' }); await page.mouse.up(); assert.equal(Math.round(await width(page)), Math.round(before));
+        const next = await handle.boundingBox(); await page.mouse.move(next.x + next.width / 2, next.y + 100); await page.mouse.down(); await page.mouse.move(next.x + 130, next.y + 100, { steps: 6 });
+        await handle.evaluate(node => node.releasePointerCapture(1)); await page.mouse.up();
+        assert.ok(await width(page) > before + 80); assert.equal((await geometry(page)).resizing, false); await settledReader(page);
+        return { mechanism: 'Real mouse capture, synthetic cancellation event; lost capture via native releasePointerCapture', geometry: await geometry(page) };
+      });
     }
 
   }

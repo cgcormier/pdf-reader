@@ -160,9 +160,39 @@ the browser suite owner's responsibility.
 
 ### Round 3: Non-drag pointer operation
 
-Planned meaningful accessibility increment: visible Narrower/Wider controls,
-accessible names, disabled bounds, and focus retention. Their placement must not
-reduce the short-height outline below two complete fixture rows. Pending review.
+The initial increment adds visible Narrower/Wider controls and Book/scroll source
+anchor capture/restoration. Independent review used 632 sections at minimum width,
+both 1440x900 and 1000x420. The 50px control group fits the heading; the desktop
+count wraps, while the short count fits one line. Two complete outline rows remain
+visible. The no-match message and filter remain usable. The reviewer opened all
+four initial images in `contents-navigation-after-aL4r7M/`.
+
+Observed mismatch: Home to 260, click Wider, click Narrower back to 260. Native
+disabled made the focused Narrower button lose focus to the body. The agreed
+refinement uses `aria-disabled` with a guarded action, keeping focus stable.
+Independent run `contents-navigation-after-VJdQBF/` confirmed focused Narrower,
+disabled semantics, no width change on Enter, and no page turn on ArrowRight.
+
+A second observed mismatch blocks final acceptance: at the top of a fresh
+Book/scroll document, initial scrollTop was 1 and the chapter title's Y coordinate
+was 327.19. Home from 280 to 260 produced scrollTop 284/title Y 44.19, hiding the
+chapter opening. The reviewer opened the before/after images in the same run.
+Preserving a source offset alone does not preserve this visual reading position.
+Interaction/browser owners received the criterion to retain the source anchor's
+viewport offset, including the chapter opening at document start. The refined
+capture omits a text anchor while the reading line is above source prose,
+allowing the scroller's visual fraction to preserve the opening. Independent
+`contents-navigation-after-u5IUqr/` rerun kept scrollTop 1/title Y 327.19 before
+and after; the reviewer opened the corrected image.
+
+The browser lane also reproduced a modal interruption leaving drag state active.
+After its cleanup refinement, the reviewer exercised an actual UI path: hold a
+pointer drag, Shift+Tab to Reading corner help, and Enter. The modal opened with
+focus on its close button and no resizing state; releasing the pointer and Escape
+returned focus to help. Screenshot inspected in `contents-navigation-after-Sifl1L/`.
+The ordinary outline ink oracle cannot inspect an intentionally obscured modal
+background; that probe used a direct screenshot rather than calling background
+ink loss a product defect. Final nonzero-anchor suite verdict pending.
 
 ### Round 4: Lifecycle and final visual integration
 
