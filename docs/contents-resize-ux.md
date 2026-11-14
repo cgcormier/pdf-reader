@@ -125,10 +125,38 @@ interaction suite.
 
 ### Round 2: Narrow reader and short desktop
 
-Agreed observable refinement with layout owner: toolbar labels remain whole and
-controls remain individually hittable at reader widths near 560px, without
-horizontal overflow or loss of two-page text. Paper-gutter changes require the
-pagination measuring surface to match. Pending before/after browser verdict.
+The initial implementation uses a reader container query and two toolbar rows
+near the minimum reader width. The agreed criterion was whole labels and
+individually hittable controls without horizontal overflow or loss of two-page
+text. Paper metrics were deliberately unchanged because the pagination measuring
+surface must match any such change.
+
+Independent Chrome probes covered 821x900, 1000x420, 1100x900, and 1280x900 in
+`output/playwright/contents-navigation-after-vMUczB/`; the reviewer opened the
+821, short, and 1280 images. All visible toolbar control centers hit their own
+control. The previously stacked labels now fit whole. Extra threshold probes at
+1217, 1220, and 1240 in `contents-navigation-after-IQniCB/` also passed; the 1220
+image was inspected. No artificial layout defect was invented to justify changes.
+
+The meaningful refinement selected with the root is the observed breakpoint
+focus loss: focus the desktop separator, then shrink to 390x640. Initial Chrome
+behavior moved focus to the body, losing the user's place. Evidence is in
+`contents-navigation-after-ddl8Cu/`. The interaction owner receives the criterion:
+transfer focus to the visible Contents toggle, allow keyboard reopening, and
+retain the desktop preference on return.
+
+Independent post-refinement run `contents-navigation-after-xryFSU/` observed
+focus on the visible Contents toggle; Enter opened the drawer and focused its
+search field, Escape closed it, and returning to desktop restored the preferred
+480px. The reviewer opened the mobile focus screenshot. The broader browser
+suite then found a timing-sensitive failure at the exact 820px boundary: browser
+blur could precede the media callback. A second refinement records divider focus
+until that callback, while clearing it after normal focus departure. Independent
+run `contents-navigation-after-bGncjI/` passed eight 1000x640 to 820x640 crossings;
+all focused Contents. A stale-focus check moved from divider to the paper button
+before crossing and retained the paper button. Round 2 bounded UX verdict: pass
+for toolbar acceptance and both focus refinements; full-core acceptance remains
+the browser suite owner's responsibility.
 
 ### Round 3: Non-drag pointer operation
 

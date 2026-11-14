@@ -1257,6 +1257,7 @@ const contentsResizer = $('contents-resizer');
 const contentsWorkspace = contentsResizer.parentElement;
 let preferredContentsWidth = null;
 let contentsDrag = null;
+let contentsResizerFocused = false;
 let contentsWidthFrame = null;
 let pendingContentsWidth = null;
 const contentsResizeEnabled = () => !smallScreen.matches && !document.body.classList.contains('focus-mode');
@@ -1351,12 +1352,19 @@ contentsResizer.addEventListener('keydown', event => {
   resizeTimer = setTimeout(() => settleContentsResize(), 160);
 });
 window.addEventListener('blur', () => finishContentsDrag());
+contentsResizer.addEventListener('focus', () => { contentsResizerFocused = true; });
+contentsResizer.addEventListener('blur', () => {
+  // Hiding at the breakpoint can blur the separator before the media callback.
+  if (!smallScreen.matches) contentsResizerFocused = false;
+});
 applyContentsWidth();
 smallScreen.addEventListener('change', () => {
   finishContentsDrag({ renderReader: false });
   settleContentsResize({ renderReader: false });
   applyContentsWidth();
-  const focusWasInContents = $('book-contents').contains(document.activeElement);
+  const focusWasInContents = $('book-contents').contains(document.activeElement)
+    || document.activeElement === contentsResizer || contentsResizerFocused;
+  contentsResizerFocused = false;
   if (!smallScreen.matches) closeContents({ restoreFocus: false });
   if (focusWasInContents) {
     // The mobile close button disappears on desktop; the whole rail hides on mobile.

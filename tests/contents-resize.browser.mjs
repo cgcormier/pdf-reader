@@ -8,7 +8,9 @@ import { settledReader, captureReader } from './reader-capture.mjs';
 
 // Synthetic PDF and semantic outline; isolated origin/profile never touch the user's shelf.
 const baseline = process.argv.includes('--baseline');
-assert.ok(process.argv.slice(2).every(arg => ['--baseline'].includes(arg)), 'Only --baseline is supported');
+const matrix = process.argv.includes('--matrix');
+const focus = process.argv.includes('--focus');
+assert.ok(process.argv.slice(2).every(arg => ['--baseline', '--matrix', '--focus'].includes(arg)), 'Only --baseline and --matrix are supported');
 const root = process.cwd();
 await mkdir(path.join(root, 'output/playwright'), { recursive: true });
 const run = await mkdtemp(path.join(root, 'output/playwright/contents-resize-'));
@@ -75,6 +77,29 @@ async function shot(page, name, { mid = false } = {}) {
   const details = { file, geometry: await geometry(page), reader };
   report.screenshots.push(details); return details;
 }
+async function inspectControls(page) {
+  return page.evaluate(() => {
+    const issues = [], controls = [...document.querySelectorAll('.reader-toolbar button, .reader-footer button, .reader-footer input')].filter(node => node.checkVisibility());
+    for (const node of controls) {
+      const rect = node.getBoundingClientRect(), container = node.closest('.reader-toolbar, .reader-footer').getBoundingClientRect();
+      if (rect.left < container.left - 1 || rect.right > container.right + 1) issues.push(`${node.id}: outside container`);
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      if (rect.top >= 0 && rect.bottom <= innerHeight && hit && !node.contains(hit)) issues.push(`${node.id}: center intercepted by ${hit.id || hit.tagName}`);
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT); const lines = new Set();
+      while (walker.nextNode()) if (walker.currentNode.textContent.trim()) {
+        const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+        for (const line of range.getClientRects()) if (line.width) lines.add(Math.round(line.y));
+      }
+      if (node.closest('.reader-toolbar') && lines.size > 1) issues.push(`${node.id}: label wraps across ${lines.size} lines`);
+    }
+    for (let i = 0; i < controls.length; i++) for (const other of controls.slice(i + 1)) {
+      const a = controls[i].getBoundingClientRect(), b = other.getBoundingClientRect();
+      if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) issues.push(`${controls[i].id}/${other.id}: overlap`);
+    }
+    return issues;
+  });
+}
+
 async function drag(page, delta, midName) {
   const box = await page.locator('#contents-resizer').boundingBox();
   assert.ok(box && box.width > 0, 'Resize handle needs usable geometry');
@@ -107,6 +132,7 @@ try {
     }
   } else {
     await page.locator('#contents-resizer').waitFor({ state: 'visible' });
+    if (!focus) {
     await check('pointer width follows during drag and remains after release', async () => {
       const before = await width(page), after = await drag(page, 96, 'pointer-middle');
       assert.ok(Math.abs(after.sidebar.width - before - 96) < 2, JSON.stringify(after));
@@ -192,6 +218,46 @@ try {
       assert.equal(after.horizontalOverflow, before.horizontalOverflow);
       const result = await shot(page, 'sticky-short-scrolled'); await page.evaluate(() => scrollTo(0, 0)); return result;
     });
+
+    }
+    await check('focused separator crossing mobile breakpoint returns focus to Contents', async () => {
+      await page.setViewportSize({ width: 1000, height: 640 }); await settledReader(page); await page.locator('#contents-resizer').focus();
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'contents-resizer', 'Separator was not focused before crossing');
+      await page.setViewportSize({ width: 820, height: 640 });
+      await shot(page, 'separator-breakpoint-observed');
+      await page.waitForFunction(() => document.activeElement?.id === 'contents-toggle', undefined, { timeout: 3000 }).catch(async error => { throw new Error(`${error.message}; state=${JSON.stringify(await geometry(page))}`); });
+      assert.equal(await page.locator('[inert]').count(), 0);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('#book-contents').contains(document.activeElement));
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'contents-toggle');
+      assert.equal(await page.locator('[inert]').count(), 0);
+      await shot(page, 'separator-mobile-focus'); await page.setViewportSize({ width: 1440, height: 900 }); await settledReader(page);
+    });
+
+    await check('deliberate desktop focus departure does not force Contents on mobile', async () => {
+      await page.setViewportSize({ width: 1000, height: 640 }); await settledReader(page);
+      await page.locator('#contents-resizer').focus(); await page.locator('#page-input').focus();
+      await page.setViewportSize({ width: 820, height: 640 }); await settledReader(page);
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'page-input');
+      await page.setViewportSize({ width: 1440, height: 900 }); await settledReader(page);
+    });
+
+    if (matrix) {
+      await fixture(page);
+      for (const [viewport, size] of [['narrow', { width: 821, height: 900 }], ['short', { width: 1000, height: 420 }], ['wide', { width: 1440, height: 900 }]]) {
+        for (const mode of ['book', 'original']) for (const layout of ['pages', 'scroll']) for (const paper of ['light', 'dark']) {
+          await check(`matrix ${viewport} ${mode} ${layout} ${paper} maximum`, async () => {
+            await page.setViewportSize(size); await page.locator(`#${mode}-view`).click(); await page.locator(`#${layout}-layout`).click();
+            if (await page.locator('body').evaluate(body => body.classList.contains('dark-paper')) !== (paper === 'dark')) await page.locator('#paper-button').click();
+            await page.locator('#contents-resizer').press('End'); await settledReader(page);
+            const snapshot = await shot(page, `matrix-${viewport}-${mode}-${layout}-${paper}`), issues = await inspectControls(page);
+            assert.equal(snapshot.geometry.horizontalOverflow, 0); assert.equal(snapshot.geometry.listOverflow, 0);
+            assert.deepEqual(issues, [], `Toolbar/footer geometry: ${issues.join('; ')}`); return snapshot;
+          });
+        }
+      }
+    }
 
   }
 } catch (error) { report.errors.push(error.stack || error.message); }
