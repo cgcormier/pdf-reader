@@ -6,6 +6,7 @@ import { demo } from './demo.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
 import { indexContents, filterContents } from './contents-navigation.js';
+import { contentsWidthBounds, effectiveContentsWidth, contentsWidthKey } from './contents-resize.js';
 import { turnPages } from './page-turn.js';
 import { attachPageTurnSpeed } from './page-turn-speed.js';
 import { FIT_CACHE_LIMIT, paginateTextSteps, createBookPager } from './book-pagination.js';
@@ -48,6 +49,7 @@ let contentsInert = [];
 let highlightedContents = new Set();
 const contentsLinks = new Map();
 let resizeTimer;
+let contentsResizeActive = false;
 let scrollSaveTimer = null;
 let epoch = 0;
 let importing = null;
@@ -665,7 +667,7 @@ function cancelPageTurn() {
   readerMetric('cancelled');
 }
 function resumeInterruptedRender() {
-  if (interruptedRender && !resizeTimer && !$('modal').open && document.visibilityState !== 'hidden') render();
+  if (interruptedRender && !resizeTimer && !contentsResizeActive && !$('modal').open && document.visibilityState !== 'hidden') render();
 }
 $('modal').addEventListener('close', resumeInterruptedRender);
 function stopSpreadWarmup() {
@@ -1251,7 +1253,109 @@ $('text-help-button').addEventListener('click', () => {
   showModal('When the text looks wrong', content);
 });
 ['pages', 'scroll'].forEach(value => $(`${value}-layout`).addEventListener('click', () => setLayout(value)));
+const contentsResizer = $('contents-resizer');
+const contentsWorkspace = contentsResizer.parentElement;
+let preferredContentsWidth = null;
+let contentsDrag = null;
+let contentsWidthFrame = null;
+let pendingContentsWidth = null;
+const contentsResizeEnabled = () => !smallScreen.matches && !document.body.classList.contains('focus-mode');
+const workspaceWidth = () => contentsWorkspace.getBoundingClientRect().width;
+function applyContentsWidth(width = preferredContentsWidth) {
+  const available = workspaceWidth();
+  const bounds = contentsWidthBounds(available);
+  const effective = effectiveContentsWidth(width, available);
+  contentsWorkspace.style.setProperty('--sidebar-width', `${effective}px`);
+  contentsResizer.setAttribute('aria-valuemin', bounds.min);
+  contentsResizer.setAttribute('aria-valuemax', bounds.max);
+  contentsResizer.setAttribute('aria-valuenow', effective);
+  contentsResizer.setAttribute('aria-valuetext', `${effective} pixels`);
+  return effective;
+}
+function flushContentsWidth() {
+  if (contentsWidthFrame !== null) cancelAnimationFrame(contentsWidthFrame);
+  contentsWidthFrame = null;
+  if (pendingContentsWidth !== null) applyContentsWidth(pendingContentsWidth);
+  pendingContentsWidth = null;
+}
+function beginContentsResize() {
+  clearTimeout(resizeTimer); resizeTimer = null;
+  if (contentsResizeActive) return;
+  contentsResizeActive = true;
+  cancelPageTurn();
+  if (mode === 'book' && layout === 'pages') {
+    // Keep the painted spread while preventing old-width fitting from committing.
+    pagedRenderController?.abort();
+    spreadPreparation?.controller.abort();
+    spreadPreparation?.buffer.clear(); spreadPreparation = null;
+  }
+}
+function settleContentsResize({ renderReader = true } = {}) {
+  clearTimeout(resizeTimer); resizeTimer = null;
+  contentsResizeActive = false;
+  if (renderReader && mode === 'book' && layout === 'pages') render();
+}
+function finishContentsDrag({ rollback = false, renderReader = true } = {}) {
+  if (!contentsDrag) return;
+  flushContentsWidth();
+  const drag = contentsDrag;
+  contentsDrag = null;
+  const effective = Number(contentsResizer.getAttribute('aria-valuenow'));
+  // A click at a viewport clamp is not a new preferred width.
+  preferredContentsWidth = rollback || effective === drag.width ? drag.preferred : effective;
+  applyContentsWidth();
+  document.body.classList.remove('contents-resizing');
+  if (contentsResizer.hasPointerCapture(drag.pointerId)) contentsResizer.releasePointerCapture(drag.pointerId);
+  settleContentsResize({ renderReader });
+}
+contentsResizer.addEventListener('pointerdown', event => {
+  if (!contentsResizeEnabled() || event.button !== 0 || contentsDrag) return;
+  event.preventDefault();
+  beginContentsResize();
+  contentsDrag = { pointerId: event.pointerId, startX: event.clientX,
+    width: Number(contentsResizer.getAttribute('aria-valuenow')), preferred: preferredContentsWidth };
+  contentsResizer.focus({ preventScroll: true });
+  contentsResizer.setPointerCapture(event.pointerId);
+  document.body.classList.add('contents-resizing');
+});
+contentsResizer.addEventListener('pointermove', event => {
+  if (event.pointerId !== contentsDrag?.pointerId) return;
+  pendingContentsWidth = contentsDrag.width + event.clientX - contentsDrag.startX;
+  if (contentsWidthFrame === null) contentsWidthFrame = requestAnimationFrame(() => {
+    contentsWidthFrame = null;
+    applyContentsWidth(pendingContentsWidth); pendingContentsWidth = null;
+  });
+});
+contentsResizer.addEventListener('pointerup', event => {
+  if (event.pointerId === contentsDrag?.pointerId) finishContentsDrag();
+});
+contentsResizer.addEventListener('pointercancel', event => {
+  if (event.pointerId === contentsDrag?.pointerId) finishContentsDrag({ rollback: true });
+});
+contentsResizer.addEventListener('lostpointercapture', event => {
+  if (event.pointerId === contentsDrag?.pointerId) finishContentsDrag();
+});
+contentsResizer.addEventListener('keydown', event => {
+  if (!contentsResizeEnabled() || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.key === 'Escape' && contentsDrag) {
+    event.preventDefault(); finishContentsDrag({ rollback: true }); return;
+  }
+  if (contentsDrag) return;
+  const width = Number(contentsResizer.getAttribute('aria-valuenow'));
+  const next = contentsWidthKey(event.key, width, contentsWidthBounds(workspaceWidth()), event.shiftKey);
+  if (next === null) return;
+  event.preventDefault();
+  if (next === width) return;
+  beginContentsResize();
+  preferredContentsWidth = next; applyContentsWidth();
+  resizeTimer = setTimeout(() => settleContentsResize(), 160);
+});
+window.addEventListener('blur', () => finishContentsDrag());
+applyContentsWidth();
 smallScreen.addEventListener('change', () => {
+  finishContentsDrag({ renderReader: false });
+  settleContentsResize({ renderReader: false });
+  applyContentsWidth();
   const focusWasInContents = $('book-contents').contains(document.activeElement);
   if (!smallScreen.matches) closeContents({ restoreFocus: false });
   if (focusWasInContents) {
@@ -1263,6 +1367,9 @@ smallScreen.addEventListener('change', () => {
   flushScrollSave(); render();
 });
 window.addEventListener('resize', () => {
+  finishContentsDrag({ renderReader: false });
+  settleContentsResize({ renderReader: false });
+  applyContentsWidth();
   cancelPageTurn();
   clearTimeout(resizeTimer); resizeTimer = null;
   if (layout === 'pages' && mode === 'book') resizeTimer = setTimeout(() => { resizeTimer = null; render(); }, 160);
@@ -1313,6 +1420,8 @@ $('bookmark-button').addEventListener('click', async () => {
   toast(present ? `Page ${page} tucked away. Find it on My shelf.` : 'Bookmark removed.');
 });
 function toggleFocus() {
+  finishContentsDrag({ renderReader: false });
+  settleContentsResize({ renderReader: false });
   cancelPageTurn();
   closeContents();
   const focus = document.body.classList.toggle('focus-mode');
@@ -1331,7 +1440,7 @@ $('contents-toggle').addEventListener('click', () => {
 });
 document.addEventListener('keydown', event => {
   if (event.defaultPrevented || $('page-turn-speed-panel').contains(event.target) || $('modal').open
-    || event.target.closest('.contents-panel, #contents-toggle')
+    || event.target.closest('.contents-panel, #contents-toggle, #contents-resizer')
     || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.ctrlKey || event.metaKey || event.altKey) return;
   if (['ArrowRight', 'ArrowLeft'].includes(event.key)) {
     event.preventDefault();
