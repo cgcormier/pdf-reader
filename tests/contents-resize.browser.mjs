@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { makeLayoutPdf } from './pdf-layout-fixture.mjs';
@@ -8,10 +9,13 @@ import { settledReader, captureReader } from './reader-capture.mjs';
 
 // Synthetic PDF and semantic outline; isolated origin/profile never touch the user's shelf.
 const baseline = process.argv.includes('--baseline');
-const matrix = process.argv.includes('--matrix');
+const full = process.argv.includes('--all');
+const matrix = full || process.argv.includes('--matrix');
 const focus = process.argv.includes('--focus');
-const robust = process.argv.includes('--robust');
-assert.ok(process.argv.slice(2).every(arg => ['--baseline', '--matrix', '--focus', '--robust'].includes(arg)), 'Only --baseline, --matrix, --focus and --robust are supported');
+const robust = full || process.argv.includes('--robust');
+const perf = process.argv.includes('--perf');
+const navigation = full || process.argv.includes('--navigation');
+assert.ok(process.argv.slice(2).every(arg => ['--baseline', '--matrix', '--focus', '--robust', '--perf', '--navigation', '--all'].includes(arg)), 'Only --baseline, --matrix, --focus, --robust, --perf, --navigation and --all are supported');
 const root = process.cwd();
 await mkdir(path.join(root, 'output/playwright'), { recursive: true });
 const run = await mkdtemp(path.join(root, 'output/playwright/contents-resize-'));
@@ -78,9 +82,42 @@ async function shot(page, name, { mid = false } = {}) {
   const details = { file, geometry: await geometry(page), reader };
   report.screenshots.push(details); return details;
 }
+async function repeatedDrags(page, count, prefix) {
+  const measurements = [];
+  await page.locator('#contents-resizer').press('Home'); await settledReader(page); await page.waitForTimeout(700);
+  for (let index = 0; index < count; index++) {
+    await page.evaluate(() => {
+      window.__resizeMetrics = []; window.__folioReaderMetric = metric => window.__resizeMetrics.push(metric);
+      const scroll = document.body.classList.contains('scroll-mode'), original = document.querySelector('#original-view').getAttribute('aria-pressed') === 'true';
+      const number = document.querySelector('#page-input').value;
+      window.__resizeSelector = scroll ? `#scroll-stage [data-source-page="${number}"]${original ? ' canvas' : ''}` : original ? '#original-stage canvas' : '#book-spread > .paper-page';
+      window.__resizeLeaf = document.querySelector(window.__resizeSelector);
+      window.__resizeFrames = []; window.__resizeFrameActive = true; let previous = performance.now();
+      const frame = time => { if (!window.__resizeFrameActive) return; window.__resizeFrames.push(time - previous); previous = time; requestAnimationFrame(frame); }; requestAnimationFrame(frame);
+    });
+    const before = await width(page), box = await page.locator('#contents-resizer').boundingBox(), x = box.x + box.width / 2, y = box.y + 100;
+    await page.mouse.move(x, y); await page.mouse.down(); const began = performance.now();
+    await page.mouse.move(x + (index % 2 ? -220 : 220), y, { steps: 16 });
+    const during = await page.evaluate(() => ({ leafRetained: window.__resizeLeaf === document.querySelector(window.__resizeSelector),
+      fits: window.__resizeMetrics.filter(metric => metric.type === 'fitting-start').length, frames: window.__resizeFrames }));
+    if (index === 0) await shot(page, `${prefix}-during`, { mid: true });
+    await page.mouse.up(); const released = performance.now(); await settledReader(page);
+    const after = await page.evaluate(() => { window.__resizeFrameActive = false; return { metrics: window.__resizeMetrics, surfaceRetained: window.__resizeLeaf === document.querySelector(window.__resizeSelector), original: document.querySelector('#original-view').getAttribute('aria-pressed') === 'true' }; });
+    const frames = during.frames.filter(value => value > 0).sort((a, b) => a - b);
+    const result = { index, before, after: await width(page), pointerMilliseconds: Math.round(released - began), settleMilliseconds: Math.round(performance.now() - released),
+      retainedDuring: during.leafRetained, retainedAfter: after.surfaceRetained, original: after.original, fittingStartsDuring: during.fits, fittingStartsAfter: after.metrics.filter(metric => metric.type === 'fitting-start').length,
+      frameCount: frames.length, frameP95: frames[Math.floor(frames.length * .95)], frameMaximum: frames.at(-1) };
+    measurements.push(result);
+    assert.equal(result.retainedDuring, true, JSON.stringify(result)); if (result.original) assert.equal(result.retainedAfter, true, JSON.stringify(result)); assert.equal(result.fittingStartsDuring, 0, JSON.stringify(result));
+    assert.ok(result.settleMilliseconds < 10000, JSON.stringify(result));
+    await page.waitForTimeout(700); // Isolate this gesture from its speculative warmup.
+  }
+  await shot(page, `${prefix}-after`); return measurements;
+}
+
 async function scrollSource(page) {
   return page.evaluate(async () => {
-    const stage = document.querySelector('#scroll-stage'), number = Number(document.querySelector('#page-input').value);
+    const stage = document.querySelector('#scroll-stage'), number = Number(document.querySelector('#progress-slider').value);
     const leaf = stage.querySelector(`[data-source-page="${number}"]`), layout = leaf?.layoutModel;
     if (!layout) throw new Error('No source layout at scroll reading page');
     const readingY = stage.getBoundingClientRect().top + 18;
@@ -95,14 +132,17 @@ async function scrollSource(page) {
 }
 async function scrollFraction(page) {
   return page.evaluate(() => {
-    const stage = document.querySelector('#scroll-stage'), number = Number(document.querySelector('#page-input').value);
+    const stage = document.querySelector('#scroll-stage'), number = Number(document.querySelector('#progress-slider').value);
     const leaf = stage.querySelector(`[data-source-page="${number}"]`), box = leaf.getBoundingClientRect();
     return { page: number, fraction: Math.max(0, Math.min(1, (stage.getBoundingClientRect().top + 16 - box.top) / box.height)) };
   });
 }
 
 async function gotoSource(page, number) {
-  await page.locator('#page-input').fill(String(number)); await page.locator('#page-input').press('Enter'); await settledReader(page, number);
+  await page.locator('#page-input').fill(String(number)); await page.locator('#page-input').press('Enter');
+  await page.locator('#page-input').blur();
+  await page.waitForFunction(expected => Number(document.querySelector('#progress-slider').value) === expected, number);
+  await settledReader(page, number);
 }
 
 async function inspectControls(page) {
@@ -160,7 +200,7 @@ try {
     }
   } else {
     await page.locator('#contents-resizer').waitFor({ state: 'visible' });
-    if (!focus && !robust) {
+    if (full || !focus && !robust && !perf && !navigation) {
     await check('pointer width follows during drag and remains after release', async () => {
       const before = await width(page), after = await drag(page, 96, 'pointer-middle');
       assert.ok(Math.abs(after.sidebar.width - before - 96) < 2, JSON.stringify(after));
@@ -248,7 +288,7 @@ try {
     });
 
     }
-    if (!robust) {
+    if (full || !robust && !perf && !navigation) {
     await check('focused separator crossing mobile breakpoint returns focus to Contents', async () => {
       await page.setViewportSize({ width: 1000, height: 640 }); await settledReader(page); await page.locator('#contents-resizer').focus();
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'contents-resizer', 'Separator was not focused before crossing');
@@ -394,6 +434,90 @@ try {
         assert.ok(await width(page) > before + 80); assert.equal((await geometry(page)).resizing, false); await settledReader(page);
         return { mechanism: 'Real mouse capture, synthetic cancellation event; lost capture via native releasePointerCapture', geometry: await geometry(page) };
       });
+    }
+
+    if (navigation || robust) {
+      await fixture(page); await page.setViewportSize({ width: 1440, height: 900 });
+      for (const destination of ['next', 'same-page-form', 'far-contents']) await check(`explicit ${destination} navigation wins pending resize restoration`, async () => {
+        await page.locator('#book-view').click(); await page.locator('#scroll-layout').click(); await page.locator('#contents-resizer').press('Home'); await settledReader(page); await gotoSource(page, 17);
+        await page.locator('#scroll-stage').evaluate(stage => { stage.scrollTop += 400; }); await settledReader(page); const before = await scrollSource(page);
+        if (destination === 'far-contents') await page.locator('#contents-search').fill('Chapter 24:');
+        const inputTrace = await page.evaluate(destination => {
+          const trace = [{ page: document.querySelector('#page-input').value, actualPage: document.querySelector('#progress-slider').value, nextDisabled: document.querySelector('#next-page').disabled }];
+          document.querySelector('#contents-wider').click();
+          trace.push({ page: document.querySelector('#page-input').value, actualPage: document.querySelector('#progress-slider').value, nextDisabled: document.querySelector('#next-page').disabled });
+          if (destination === 'next') document.querySelector('#next-page').click();
+          else if (destination === 'far-contents') document.querySelector('[data-node-id="part-3-chapter-5"]').click();
+          else { document.querySelector('#page-input').value = '17'; document.querySelector('#page-form').requestSubmit(); }
+          trace.push({ page: document.querySelector('#page-input').value, actualPage: document.querySelector('#progress-slider').value, nextDisabled: document.querySelector('#next-page').disabled }); return trace;
+        }, destination);
+        await settledReader(page); const after = await scrollSource(page); await shot(page, `navigation-${destination}`);
+        const expectedPage = destination === 'next' ? 18 : destination === 'far-contents' ? 47 : 17;
+        assert.equal(after.page, expectedPage, JSON.stringify({ inputTrace, before, after }));
+        const persisted = await saved(page); assert.equal(persisted.page, expectedPage); assert.equal(persisted.bookPosition.page, expectedPage);
+        if (destination === 'same-page-form') assert.ok(after.offset <= 2, JSON.stringify({ before, after }));
+        await page.reload(); await settledReader(page, expectedPage); const reopened = await saved(page);
+        assert.equal(reopened.page, expectedPage); assert.equal(reopened.bookPosition.page, expectedPage);
+        return { inputTrace, persisted, reopened, mechanism: 'Synchronous click activation then navigation in one event task before 160ms resize settle', before, after };
+      });
+    }
+
+    if (navigation) await check('Book page flip accepts Next immediately after width action', async () => {
+      await page.locator('#book-view').click(); await page.locator('#pages-layout').click(); await page.locator('#contents-resizer').press('Home'); await settledReader(page); await gotoSource(page, 17);
+      const before = await saved(page);
+      await page.evaluate(() => { document.querySelector('#contents-wider').click(); document.querySelector('#next-page').click(); });
+      await settledReader(page); const after = await saved(page); await shot(page, 'navigation-pages-next');
+      assert.ok(after.page > before.page || after.bookPosition.offset > before.bookPosition.offset, JSON.stringify({ before, after })); return { before, after };
+    });
+
+    if (navigation) await check('queued first move interrupted by help preserves a working next turn', async () => {
+      await page.locator('#book-view').click(); await page.locator('#pages-layout').click(); await page.locator('#contents-resizer').press('Home'); await settledReader(page); await gotoSource(page, 17);
+      const before = await saved(page), box = await page.locator('#contents-resizer').boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + 100); await page.mouse.down();
+      await page.locator('#contents-resizer').evaluate((node, box) => {
+        node.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, pointerType: 'mouse', clientX: box.x + 120, clientY: box.y + 100 }));
+        document.querySelector('#launch-help').click();
+      }, box);
+      await page.locator('#modal[open]').waitFor(); await page.mouse.up(); await page.locator('#modal-close').click(); await settledReader(page);
+      await page.locator('#next-page').click(); await settledReader(page); const after = await saved(page); await shot(page, 'queued-move-modal-next');
+      assert.ok(after.page > before.page || after.bookPosition.offset > before.bookPosition.offset, JSON.stringify({ before, after }));
+      return { mechanism: 'Native capture then synthetic first move/help in one task before rAF, native modal close and Next', before, after };
+    });
+
+    if (perf) {
+      await page.setViewportSize({ width: 1440, height: 900 }); await page.locator('#book-view').click(); await page.locator('#pages-layout').click(); await settledReader(page);
+      await check('no-movement pointer click retains the fitted spread', async () => {
+        await page.waitForTimeout(700); // Let idle spread warmup finish before measuring only the click.
+        await page.evaluate(() => { window.__resizeMetrics = []; window.__folioReaderMetric = metric => window.__resizeMetrics.push(metric); window.__resizeLeaf = document.querySelector('#book-spread').firstElementChild; });
+        await page.locator('#contents-resizer').click(); await settledReader(page);
+        const result = await page.evaluate(() => ({ leafRetained: window.__resizeLeaf === document.querySelector('#book-spread').firstElementChild, fittingStarts: window.__resizeMetrics.filter(metric => metric.type === 'fitting-start').length, spreadCommits: window.__resizeMetrics.filter(metric => metric.type === 'spread-dom').length }));
+        await shot(page, 'no-op-spread'); assert.equal(result.leafRetained, true, JSON.stringify(result)); assert.equal(result.spreadCommits, 0, JSON.stringify(result)); return result;
+      });
+      await check('large synthetic outline stays attached across repeated resizes', async () => {
+        await fixture(page, { large: true }); await page.locator('#pages-layout').click(); await settledReader(page);
+        const measurements = await repeatedDrags(page, 4, 'synthetic');
+        assert.equal(await page.locator('[data-node-id]').count(), 632); return { syntheticNodes: 632, measurements };
+      });
+      await check('actual Hamlet import preserves exact PDF bytes', async () => {
+        const file = path.join(root, 'testing_downloads/Hamlet.pdf');
+        const digest = createHash('sha256').update(await readFile(file)).digest('hex');
+        await page.locator('#file-input').setInputFiles(file); await page.locator('#book-title').filter({ hasText: 'Hamlet' }).waitFor({ timeout: 30000 }); await settledReader(page);
+        const stop = page.getByRole('button', { name: 'Stop scan', exact: true });
+        if (await stop.count()) { await page.locator('#contents-analysis').evaluate(node => { node.open = true; }); if (await stop.isVisible()) await stop.click(); }
+        const stored = await page.evaluate(async () => {
+          const { getBook } = await import('/src/storage.js'); const book = await getBook(JSON.parse(localStorage.getItem('folio:active-book')));
+          const hash = await crypto.subtle.digest('SHA-256', book.bytes);
+          return { filename: book.filename, pages: book.structure.totalPages, nodes: book.structure.nodes.length, status: book.structure.status,
+            sha256: [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('') };
+        });
+        assert.equal(stored.sha256, digest); report.realDocument = stored; return stored;
+      });
+      if (report.realDocument) for (const mode of ['book', 'original']) for (const layout of ['pages', 'scroll']) await check(`real Hamlet ${mode} ${layout} repeated drag`, async () => {
+        await page.locator(`#${mode}-view`).click(); await page.locator(`#${layout}-layout`).click(); await settledReader(page); await gotoSource(page, 10);
+        const measurements = await repeatedDrags(page, mode === 'book' && layout === 'pages' ? 6 : 2, `hamlet-${mode}-${layout}`);
+        assert.equal(await page.locator('#page-input').inputValue(), '10'); return measurements;
+      });
+
     }
 
   }

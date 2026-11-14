@@ -6,7 +6,8 @@ This is the independent UX record for the desktop Contents divider. The existing
 Contents navigation, mobile drawer, book data, and reading locations remain the
 baseline. Implementation status and checkpoint ownership live in
 `contents-panel-resize.md`. This document records research, content observations,
-and the four requested review/refinement rounds; an unfinished round is not a pass.
+and the requested review/refinement rounds, including continued acceptance work;
+an unfinished round is not a pass.
 
 The initial review read `index.html`, `src/styles.css`, the resize and Contents
 paths in `src/main.js`, `tests/contents-navigation.browser.mjs`, and the existing
@@ -15,6 +16,8 @@ and browser profile, the existing 48-page synthetic PDF, and nested long titles.
 They do not represent a real scanned PDF or a screen-reader hardware test.
 
 ## Sources and their authority
+
+Sources checked on 2026-11-14.
 
 - **Normative standard:** [WAI-ARIA 1.2 separator](https://www.w3.org/TR/wai-aria-1.2/#separator)
   requires an updated numeric `aria-valuenow` for a focusable separator. It
@@ -173,7 +176,7 @@ refinement uses `aria-disabled` with a guarded action, keeping focus stable.
 Independent run `contents-navigation-after-VJdQBF/` confirmed focused Narrower,
 disabled semantics, no width change on Enter, and no page turn on ArrowRight.
 
-A second observed mismatch blocks final acceptance: at the top of a fresh
+A second observed mismatch blocked initial acceptance: at the top of a fresh
 Book/scroll document, initial scrollTop was 1 and the chapter title's Y coordinate
 was 327.19. Home from 280 to 260 produced scrollTop 284/title Y 44.19, hiding the
 chapter opening. The reviewer opened the before/after images in the same run.
@@ -192,13 +195,94 @@ focus on its close button and no resizing state; releasing the pointer and Escap
 returned focus to help. Screenshot inspected in `contents-navigation-after-Sifl1L/`.
 The ordinary outline ink oracle cannot inspect an intentionally obscured modal
 background; that probe used a direct screenshot rather than calling background
-ink loss a product defect. Final nonzero-anchor suite verdict pending.
+ink loss a product defect.
 
-### Round 4: Lifecycle and final visual integration
+The browser lane's fresh `contents-resize-F17IfT/` robust run passed all 12
+checks. Nonzero Book/scroll source offset 585 and Book/pages continuation offset
+1066 stayed exact; Original PDF source positioning and cancellation/return paths
+passed. Independent image review of the preceding equivalent post-fix run
+`contents-resize-BjLVHW/` opened source-scroll before/after, source-pages-after,
+and touch-after: the same prose stays at the top, continuation remains visible,
+and Original PDF remains painted. Round 3 verdict: pass for the three observed
+refinements, supported by independent UI probes and the fresh robust suite.
 
-Pending selection of an observed refinement after prior rounds. Final review must
-cover dark/light paper, mobile and focus-mode hide/return, reduced motion, touch
-emulation, reading anchor retention, and a fresh interaction after interruption.
+### Round 4: Avoid redundant work and preserve cancellation recovery
+
+Independent initial Book/pages measurement found three direct child-list
+mutations of the painted spread after a no-movement divider click
+(`contents-navigation-after-WReG30/`). The implementation defers expensive resize
+work until the effective width first changes. The independent same probe then
+reported zero mutations (`contents-navigation-after-oOcJZD/`). The interval was
+500ms; this measures DOM replacement, not a universal frame-time guarantee.
+
+A boundary probe found a queued-frame interruption defect. With native
+pointer capture active, a scripted move and help activation in the same task
+cancelled before the scheduled animation frame. The modal closed with normal
+painted pages and cleared drag state, but Next did not advance, even after 600ms:
+page 1 and the same 821 text characters remained. The code computed whether it
+needed a refit before flushing the pending move; that flush then aborted the
+page preparation. `contents-navigation-after-gYRE01/` reproduces this; the
+equivalent `after-BTLyUN/` screenshot was opened. Exact same-frame event timing
+is injected test input, not a claim of a physical-device failure. The agreed
+criterion is that cancellation must not start work for an unapplied width and
+must leave subsequent page navigation operational. After rollback was changed
+to discard the queued width, independent rerun
+`contents-navigation-after-3iOAsH/` returned width 280 with no resize state and
+then advanced Next to page 2, with newly painted text. The reviewer opened that
+image. Round 4 verdict: pass for both independently reproduced UX findings;
+the final isolated performance rerun remains the browser lane's acceptance gate.
+
+The real-document performance lane imported the existing 144-page Hamlet PDF
+and checked its stored-byte hash. Independent visual review opened
+`contents-resize-itGG1X/hamlet-book-pages-during.png`, its after image, and
+`hamlet-original-scroll-after.png`. Scene text remained painted and source page
+10 remained selected. The browser lane measured six Book/pages drags with no
+fitting during the drag, frame p95 16.7-16.9ms, and settle 241-469ms on that run.
+These are local observations. The large synthetic outline was slower under
+concurrent broad tests; no portable performance guarantee is inferred.
+
+### Round 5: Explicit navigation during resize settlement
+
+The added round addresses explicit navigation during the 160ms width settle
+window. Independent actual clicks started on source page 17, scrolled 500px,
+clicked Wider, then clicked the visible Contents destination on page 47. After
+700ms the UI/current section and stored page/scroll position were 47, but stored
+Book source position had been overwritten with stale page 17/offset 31.
+Evidence: `contents-navigation-after-mLNGP6/`. The agreed criterion is that a
+deliberate navigation supersedes the earlier resize snapshot, including stored
+source position and subsequent reload. The initial correction interrupts resize
+and discards its captured source position before explicit navigation.
+
+Independent post-correction `contents-navigation-after-WtNQ8f/` retained
+UI/current destination 47, stored Book position 47/offset 0 with the destination
+ID, and reloaded at page 47. The browser lane confirmed that immediate paged
+Next could still lose its requested turn. An initial near-page scroll failure
+read persisted state too early and is inconclusive as product evidence; the
+corrected live-position oracle passed. Separately, focused scroller tests
+demonstrate that a pending resize notification must not restore the pre-jump
+position, and that changed page heights must be measured before computing an
+immediate jump's pixel offset. The targeted refinement
+clears stale scroller notification state and reconciles measured page positions;
+Book/pages waits for the current width's refit before executing one requested
+turn. A newer explicit navigation must supersede that pending intent. No queued
+turn debt or new navigation mode is justified.
+
+Independent `contents-navigation-after-EUK8n9/` injected the consecutive actions
+within one task to exercise the timing boundary. Wider then Next advanced the
+painted UI and stored source to page 2/offset 0. Wider, Next, then explicit
+Contents destination 47 retained page 47/offset 0 and that destination ID. Both
+screenshots were opened; text and chapter labels matched the accepted action.
+These bounded paged checks pass. The browser lane's near-page scroll-navigation
+test and fresh overall regression gates remain before the final stopping verdict.
+
+### Continued acceptance review
+
+The user subsequently requested repeating rounds until there are no actionable
+issues and nothing justified left to add. Four rounds are therefore a minimum,
+not an automatic stopping condition. Continue bounded interaction, coherence,
+accessibility, and regression review; reject speculative features or cosmetic
+churn. Final acceptance must include fresh interruption recovery, source reading
+positions, light/dark paper, mobile/focus mode, and reduced-motion/touch evidence.
 
 ## Limits and skill audit
 

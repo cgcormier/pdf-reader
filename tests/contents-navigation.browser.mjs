@@ -60,7 +60,8 @@ async function fixture(page, { status = 'complete', empty = false, large = false
     savePreference('appearance', { size: 17, paper: 'light' });
   }, { bytes, status, empty, large, id: `contents-navigation-${++sequence}` });
   await page.goto(`http://127.0.0.1:${port}/`);
-  await page.locator('#book-title').filter({ hasText: 'The Art of Paying Attention' }).waitFor();
+  // Mobile fixtures load with the drawer closed, so identity is attached but intentionally hidden.
+  await page.locator('#book-title').filter({ hasText: 'The Art of Paying Attention' }).waitFor({ state: 'attached' });
   await settledReader(page, 1);
 }
 async function check(name, action) {

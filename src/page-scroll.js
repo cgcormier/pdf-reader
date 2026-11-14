@@ -382,6 +382,9 @@ export function createPageScroller(container, {
     const top = geometry.offsetForPosition(targetPage, safeFraction, lineInset());
     if (typeof container.scrollTo === 'function') container.scrollTo({ top, behavior: nextBehavior });
     else container.scrollTop = top;
+    // A pending container resize must preserve this jump, not the last reading
+    // position reported before it. The next frame reports the observed position.
+    lastNotified = null;
     scheduleFrame();
   }
 

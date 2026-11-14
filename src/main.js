@@ -312,6 +312,8 @@ function updateStructureTools() {
   stop.hidden = !running; stop.disabled = Boolean(importing);
 }
 async function navigateStructure(node) {
+  contentsResizeAnchor = null;
+  interruptContentsResize();
   cancelPageTurn();
   const navigationEpoch = ++structureNavigationEpoch;
   const source = pdf;
@@ -1204,6 +1206,8 @@ async function flipTo(direction) {
 }
 function navigate(number) {
   if (!Number.isInteger(number) || number < 1 || number > pageCount()) return toast(`Choose a page from 1 to ${pageCount()}.`);
+  contentsResizeAnchor = null;
+  interruptContentsResize();
   cancelPageTurn();
   ++structureNavigationEpoch; selectedStructureId = null;
   book.page = number;
@@ -1211,14 +1215,26 @@ function navigate(number) {
   if (mode === 'book') book.bookPosition = { page: number, offset: 0, layoutVersion: LAYOUT_VERSION };
   book.scrollPosition = { page: number, fraction: 0, view: mode };
   if (layout === 'scroll' && scroller) {
+    // A width adjustment can precede ResizeObserver's height measurements.
+    scroller.reflow();
     scroller.jumpTo(number, { behavior: 'auto' });
     updateReadingPosition();
   } else render();
   persist();
 }
-function turn(direction) {
+async function turn(direction) {
   readerMetric('turn-input', { direction, busy: Boolean(turnController) });
-  if (layout === 'pages' && mode === 'book') { flipTo(direction); return; }
+  if (layout === 'pages' && mode === 'book') {
+    if (contentsResizeActive || contentsDrag) {
+      finishContentsDrag();
+      if (contentsResizeActive) settleContentsResize();
+      const target = book;
+      const renderEpoch = epoch;
+      await pageFillPromise;
+      if (book !== target || epoch !== renderEpoch || mode !== 'book' || layout !== 'pages') return;
+    }
+    flipTo(direction); return;
+  }
   const number = sourcePageNavigation(book.page, pageCount(), step())[direction];
   if (number === null) return;
   navigate(number);
@@ -1283,8 +1299,13 @@ function applyContentsWidth(width = preferredContentsWidth) {
 function flushContentsWidth() {
   if (contentsWidthFrame !== null) cancelAnimationFrame(contentsWidthFrame);
   contentsWidthFrame = null;
-  if (pendingContentsWidth !== null) applyContentsWidth(pendingContentsWidth);
+  if (pendingContentsWidth !== null) applyDraggedContentsWidth();
   pendingContentsWidth = null;
+}
+function applyDraggedContentsWidth() {
+  const effective = effectiveContentsWidth(pendingContentsWidth, workspaceWidth());
+  if (effective !== Number(contentsResizer.getAttribute('aria-valuenow'))) beginContentsResize();
+  applyContentsWidth(effective);
 }
 function beginContentsResize() {
   clearTimeout(resizeTimer); resizeTimer = null;
@@ -1302,6 +1323,7 @@ function beginContentsResize() {
 }
 function settleContentsResize({ renderReader = true } = {}) {
   clearTimeout(resizeTimer); resizeTimer = null;
+  const wasActive = contentsResizeActive;
   contentsResizeActive = false;
   const anchor = contentsResizeAnchor;
   contentsResizeAnchor = null;
@@ -1309,13 +1331,14 @@ function settleContentsResize({ renderReader = true } = {}) {
     book.bookPosition = anchor.position;
     restoreScrollAnchor(anchor.position);
   }
-  if (renderReader && mode === 'book' && layout === 'pages') render();
+  if (wasActive && renderReader && mode === 'book' && layout === 'pages') render();
 }
 function interruptContentsResize() {
-  if (!contentsResizeActive) return;
+  if (!contentsResizeActive && !contentsDrag) return;
+  const needsRefit = contentsResizeActive && mode === 'book' && layout === 'pages';
   finishContentsDrag({ rollback: true, renderReader: false });
   settleContentsResize({ renderReader: false });
-  if (mode === 'book' && layout === 'pages') interruptedRender = true;
+  if (needsRefit) interruptedRender = true;
 }
 function adjustContentsWidth(next) {
   const width = Number(contentsResizer.getAttribute('aria-valuenow'));
@@ -1326,7 +1349,10 @@ function adjustContentsWidth(next) {
 }
 function finishContentsDrag({ rollback = false, renderReader = true } = {}) {
   if (!contentsDrag) return;
-  flushContentsWidth();
+  if (rollback) {
+    if (contentsWidthFrame !== null) cancelAnimationFrame(contentsWidthFrame);
+    contentsWidthFrame = null; pendingContentsWidth = null;
+  } else flushContentsWidth();
   const drag = contentsDrag;
   contentsDrag = null;
   const effective = Number(contentsResizer.getAttribute('aria-valuenow'));
@@ -1340,7 +1366,6 @@ function finishContentsDrag({ rollback = false, renderReader = true } = {}) {
 contentsResizer.addEventListener('pointerdown', event => {
   if (!contentsResizeEnabled() || event.button !== 0 || contentsDrag) return;
   event.preventDefault();
-  beginContentsResize();
   contentsDrag = { pointerId: event.pointerId, startX: event.clientX,
     width: Number(contentsResizer.getAttribute('aria-valuenow')), preferred: preferredContentsWidth };
   contentsResizer.focus({ preventScroll: true });
@@ -1352,7 +1377,7 @@ contentsResizer.addEventListener('pointermove', event => {
   pendingContentsWidth = contentsDrag.width + event.clientX - contentsDrag.startX;
   if (contentsWidthFrame === null) contentsWidthFrame = requestAnimationFrame(() => {
     contentsWidthFrame = null;
-    applyContentsWidth(pendingContentsWidth); pendingContentsWidth = null;
+    applyDraggedContentsWidth(); pendingContentsWidth = null;
   });
 });
 contentsResizer.addEventListener('pointerup', event => {

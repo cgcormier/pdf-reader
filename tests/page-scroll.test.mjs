@@ -237,6 +237,48 @@ test('ResizeObserver measurement above the reader preserves page and fraction', 
   scroller.destroy();
 });
 
+test('an explicit jump wins a pending container resize before the next frame', () => {
+  const { container, view, flushFrames } = fakeContainer();
+  const positions = [];
+  const scroller = createPageScroller(container, {
+    count: 20, initialPage: 10, initialFraction: 0.5, estimateHeight: 100, gap: 10,
+    createPage() {
+      const page = new FakeElement('article', container.ownerDocument);
+      page.style.height = '100px';
+      return page;
+    },
+    onPosition: position => positions.push(position),
+  });
+  scroller.jumpTo(11, { fraction: 0.25 });
+  view.lastObserver.emit(container, 100);
+  flushFrames();
+  assert.deepEqual(scroller.getPosition(), { page: 11, fraction: 0.25 });
+  assert.deepEqual(positions.at(-1), { page: 11, fraction: 0.25 });
+  scroller.destroy();
+});
+
+test('reflow measures changed page heights before an immediate destination jump', () => {
+  const { container, view, flushFrames } = fakeContainer();
+  const scroller = createPageScroller(container, {
+    count: 20, initialPage: 3, initialFraction: 0.5, estimateHeight: 100, gap: 10,
+    createPage() {
+      const page = new FakeElement('article', container.ownerDocument);
+      page.style.height = '100px';
+      return page;
+    },
+  });
+  for (const slot of container.children[0].children) {
+    if (slot.className === 'scroll-page-slot') slot.children[0].style.height = '160px';
+  }
+  scroller.reflow();
+  scroller.jumpTo(4, { fraction: 0.25 });
+  assert.equal(container.scrollTop, 3 * 170 + 160 * 0.25 - 16);
+  view.lastObserver.emit(container, 100);
+  flushFrames();
+  assert.deepEqual(scroller.getPosition(), { page: 4, fraction: 0.25 });
+  scroller.destroy();
+});
+
 test('a browser-clamped scroll container restores distant pages and can anchor its final short page', () => {
   const { container, flushFrames } = fakeContainer({ clientHeight: 500, clampScroll: true });
   const positions = [];
