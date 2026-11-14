@@ -5,6 +5,7 @@ import { shouldAutoScanStructure, structureFromLegacy, structureNodes, structure
 import { demo } from './demo.js';
 import { removeRepeatedChapterHeading, sourcePageNavigation, swipePageDirection } from './book-layout.js';
 import { createPageScroller } from './page-scroll.js';
+import { indexContents, filterContents } from './contents-navigation.js';
 import { turnPages } from './page-turn.js';
 import { attachPageTurnSpeed } from './page-turn-speed.js';
 import { FIT_CACHE_LIMIT, paginateTextSteps, createBookPager } from './book-pagination.js';
@@ -40,6 +41,10 @@ const fragmentCache = new Map();
 let fragmentCharacters = 0;
 const fragmentCharacterBudget = 250_000;
 let contentsSnapshot = null;
+let contentsBook = null;
+let contentsQuery = '';
+let contentsReturnFocus = null;
+let contentsInert = [];
 let highlightedContents = new Set();
 const contentsLinks = new Map();
 let resizeTimer;
@@ -201,8 +206,9 @@ function currentChapter(page = book.page) {
 }
 function contentsNodes() {
   if (!contentsSnapshot || contentsSnapshot.structure !== book.structure || contentsSnapshot.chapters !== book.chapters || contentsSnapshot.count !== pageCount()) {
+    const nodes = structureNodes(book.structure || structureFromLegacy(book.chapters, pageCount()), pageCount());
     contentsSnapshot = { structure: book.structure, chapters: book.chapters, count: pageCount(),
-      nodes: structureNodes(book.structure || structureFromLegacy(book.chapters, pageCount()), pageCount()) };
+      nodes, index: indexContents(nodes) };
   }
   return contentsSnapshot.nodes;
 }
@@ -347,15 +353,81 @@ async function navigateStructure(node) {
   else if (mode === 'book' && offset > 0) render();
   updateContents(); updateReadingPosition(); persist(); closeContents();
 }
-function closeContents() {
+function closeContents({ restoreFocus = true } = {}) {
+  const wasOpen = document.body.classList.contains('contents-open');
   document.body.classList.remove('contents-open');
   $('contents-toggle').setAttribute('aria-expanded', 'false');
+  $('book-contents').removeAttribute('role');
+  $('book-contents').removeAttribute('aria-modal');
+  for (const [node, inert] of contentsInert) node.inert = inert;
+  contentsInert = [];
+  if (wasOpen && restoreFocus) {
+    const target = contentsReturnFocus?.isConnected && contentsReturnFocus.getClientRects().length
+      ? contentsReturnFocus : $('reading-area');
+    target.focus({ preventScroll: true });
+  }
+  contentsReturnFocus = null;
 }
-$('contents-close').addEventListener('click', closeContents);
+$('contents-close').addEventListener('click', () => closeContents());
+function openContents() {
+  if (!smallScreen.matches) return;
+  contentsReturnFocus = document.activeElement;
+  document.body.classList.add('contents-open');
+  $('contents-toggle').setAttribute('aria-expanded', 'true');
+  const panel = $('book-contents');
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+  // Inert sibling branches, never the shared ancestor containing the drawer.
+  let branch = panel;
+  while (branch !== document.body) {
+    for (const sibling of branch.parentElement.children) {
+      if (sibling === branch || ['SCRIPT', 'STYLE', 'DIALOG'].includes(sibling.tagName)) continue;
+      contentsInert.push([sibling, sibling.inert]);
+      sibling.inert = true;
+    }
+    branch = branch.parentElement;
+  }
+  $('contents-search').focus({ preventScroll: true });
+}
+$('book-contents').addEventListener('keydown', event => {
+  if (!smallScreen.matches || !document.body.classList.contains('contents-open') || $('modal').open) return;
+  if (event.key === 'Escape') {
+    event.preventDefault(); closeContents(); return;
+  }
+  if (event.key !== 'Tab') return;
+  const controls = [...$('book-contents').querySelectorAll('button, input, summary, a[href], [tabindex="0"]')]
+    .filter(node => !node.disabled && !node.closest('[hidden]') && node.getClientRects().length);
+  const first = controls[0]; const last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+});
+function setContentsQuery(query) {
+  contentsQuery = query;
+  $('contents-search').value = query;
+  updateContents();
+}
+$('contents-search').addEventListener('input', event => setContentsQuery(event.target.value));
+$('contents-clear').addEventListener('click', () => {
+  setContentsQuery(''); $('contents-search').focus({ preventScroll: true });
+});
+$('contents-current').addEventListener('click', () => {
+  const nodes = contentsNodes();
+  const active = activeStructureNode(nodes, book.page, selectedStructureId);
+  expandContents(structurePath(nodes, active?.id).slice(0, -1));
+  setContentsQuery('');
+  contentsLinks.get(active?.id)?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+});
 function updateContents() {
   ensureStructure();
+  if (contentsBook !== book) {
+    contentsBook = book; contentsQuery = ''; $('contents-search').value = '';
+    $('contents-analysis').open = false;
+    $('chapter-list').replaceChildren();
+  }
   $('chapter-list').setAttribute('aria-label', 'Document contents');
   const nodes = contentsNodes();
+  const { index } = contentsSnapshot;
+  const filtered = filterContents(index, contentsQuery);
   const active = activeStructureNode(nodes, book.page, selectedStructureId);
   const path = new Set(structurePath(nodes, active?.id).map(node => node.id));
   const focused = document.activeElement?.dataset?.contentsFocus;
@@ -364,25 +436,28 @@ function updateContents() {
   contentsLinks.clear();
   const append = (parentId, host, depth = 0) => {
     const list = el('ul', 'contents-list');
-    for (const node of nodes.filter(entry => entry.parentId === parentId)) {
+    for (const node of index.children.get(parentId) || []) {
       const item = el('li', 'contents-item');
+      item.hidden = !filtered.visible.has(node.id);
       const row = el('div', 'contents-row');
       row.classList.toggle('active-parent', path.has(node.id) && node.id !== active?.id);
-      const children = nodes.some(entry => entry.parentId === node.id);
-      const open = book.contentsExpanded[node.id] ?? (node.kind === 'part' || path.has(node.id));
+      const children = index.children.has(node.id);
+      const open = filtered.filtering || (book.contentsExpanded[node.id] ?? (node.kind === 'part' || path.has(node.id)));
       if (children) {
         const toggle = button(open ? '▾' : '▸', 'contents-disclosure', () => {
           book.contentsExpanded[node.id] = !open; updateContents(); persist({ contentsExpanded: book.contentsExpanded });
         });
         toggle.setAttribute('aria-expanded', String(open));
-        toggle.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${node.title}`);
+        toggle.setAttribute('aria-label', filtered.filtering ? `${node.title}, expanded while filtering` : `${open ? 'Collapse' : 'Expand'} ${node.title}`);
         toggle.setAttribute('aria-controls', `contents-group-${node.id}`);
         toggle.dataset.contentsFocus = `toggle-${node.id}`;
+        toggle.disabled = filtered.filtering;
         row.append(toggle);
       } else row.append(el('span', 'contents-disclosure-spacer'));
       const link = button('', 'chapter-link structure-link', () => navigateStructure(node));
       contentsLinks.set(node.id, link);
       link.dataset.nodeId = node.id; link.dataset.contentsFocus = node.id; link.dataset.page = node.page;
+      link.setAttribute('aria-label', `${node.title}, PDF page ${node.page}`);
       link.classList.toggle('active', node.id === active?.id);
       if (node.id === active?.id) link.setAttribute('aria-current', 'location');
       link.title = `${node.title} · PDF page ${node.page}${node.pageLabel && node.pageLabel !== String(node.page) ? ` (printed ${node.pageLabel})` : ''} · ${node.source}${node.evidence?.length ? `: ${node.evidence.join(', ')}` : ''}`;
@@ -397,18 +472,34 @@ function updateContents() {
     host.append(list);
   };
   append(null, fragment);
-  if (!nodes.length) fragment.append(el('p', 'inline-note', 'Finding the document’s headings…'));
+  if (!nodes.length || !filtered.matches.size) {
+    const empty = el('p', 'inline-note contents-empty'); empty.id = 'contents-empty';
+    empty.textContent = nodes.length ? `No section titles match. Try another title or clear the filter.${book.structure?.status === 'scanning' ? ' Document analysis is still finding sections.' : ''}`
+      : book.structure?.status === 'scanning' ? 'Finding the document’s headings. You can keep reading.'
+      : ['cancelled', 'error'].includes(book.structure?.status) ? 'No sections found yet. Resume document analysis to keep looking.'
+      : book.structure?.status === 'complete' ? 'No sections found. Use PDF pages or available page bookmarks to navigate.'
+      : 'No sections available yet. Scan the PDF to look for headings.';
+    fragment.append(empty);
+  }
+  $('contents-clear').hidden = !contentsQuery;
+  $('contents-count').textContent = filtered.filtering
+    ? `${filtered.matches.size} ${filtered.matches.size === 1 ? 'match' : 'matches'}`
+    : `${nodes.length} ${nodes.length === 1 ? 'section' : 'sections'}`;
+  $('contents-current').disabled = !active;
   const pageBookmarks = book.structure?.pageNavigation || [];
   if (pageBookmarks.length) {
     // Scanner destinations remain useful without becoming chapter identities.
     const details = el('details', 'page-bookmarks');
     details.open = Boolean($('chapter-list').querySelector('.page-bookmarks')?.open);
-    details.append(el('summary', 'text-button', `PDF page bookmarks (${pageBookmarks.length})`));
+    const summary = el('summary', 'text-button', `PDF page bookmarks (${pageBookmarks.length})`);
+    summary.dataset.contentsFocus = 'page-bookmarks-summary';
+    details.append(summary);
     const list = el('ul', 'contents-list');
     for (const node of pageBookmarks) {
       const item = el('li', 'contents-item');
       const link = button('', 'chapter-link structure-link', () => navigateStructure(node));
       link.dataset.pageBookmark = node.id; link.dataset.contentsFocus = node.id;
+      link.setAttribute('aria-label', `${node.title}, PDF page ${node.page}`);
       link.title = `${node.title} · PDF page ${node.page}`;
       link.append(el('span', 'chapter-label', node.title), el('span', 'chapter-page', node.page));
       item.append(link); list.append(item);
@@ -429,6 +520,11 @@ function updateContents() {
   $('book-view').title = hasNoReadableText() ? 'This PDF has no readable text layer. Use Original PDF.' : '';
   $('chapter-note').textContent = structureStatus();
   $('chapter-note').setAttribute('role', 'status');
+  const status = book.structure?.status;
+  $('contents-analysis-label').textContent = status === 'scanning' ? 'Document analysis · Scanning'
+    : status === 'cancelled' ? 'Document analysis · Stopped'
+    : status === 'error' ? 'Document analysis · Paused after an error'
+    : status === 'complete' ? 'Document analysis · Complete' : 'Document analysis';
   updateStructureTools();
   $('current-chapter').textContent = active?.title || currentChapter().title;
   $('current-chapter').title = structurePath(nodes, active?.id).map(node => node.title).join(' › ');
@@ -515,10 +611,7 @@ function updateReadingPosition() {
   const nodes = contentsNodes();
   const chapter = activeStructureNode(nodes, book.page, selectedStructureId);
   const path = new Set(structurePath(nodes, chapter?.id).map(node => node.id));
-  // Reveal the active branch when a page change enters a collapsed group.
-  if (chapter && $('current-chapter').dataset.activeId !== chapter.id) {
-    if (expandContents(structurePath(nodes, chapter.id).slice(0, -1))) updateContents();
-  }
+  $('contents-current').disabled = !chapter;
   // Only the former/current branch can change its highlight during a turn.
   for (const id of new Set([...highlightedContents, ...path])) {
     const link = contentsLinks.get(id);
@@ -1158,7 +1251,17 @@ $('text-help-button').addEventListener('click', () => {
   showModal('When the text looks wrong', content);
 });
 ['pages', 'scroll'].forEach(value => $(`${value}-layout`).addEventListener('click', () => setLayout(value)));
-smallScreen.addEventListener('change', () => { flushScrollSave(); render(); });
+smallScreen.addEventListener('change', () => {
+  const focusWasInContents = $('book-contents').contains(document.activeElement);
+  if (!smallScreen.matches) closeContents({ restoreFocus: false });
+  if (focusWasInContents) {
+    // The mobile close button disappears on desktop; the whole rail hides on mobile.
+    const target = smallScreen.matches ? $('contents-toggle')
+      : document.activeElement.getClientRects().length ? document.activeElement : $('contents-search');
+    target.focus({ preventScroll: true });
+  }
+  flushScrollSave(); render();
+});
 window.addEventListener('resize', () => {
   cancelPageTurn();
   clearTimeout(resizeTimer); resizeTimer = null;
@@ -1222,11 +1325,12 @@ function toggleFocus() {
 $('focus-button').addEventListener('click', toggleFocus);
 $('contents-toggle').addEventListener('click', () => {
   cancelPageTurn();
-  const open = document.body.classList.toggle('contents-open');
-  $('contents-toggle').setAttribute('aria-expanded', String(open));
+  if (document.body.classList.contains('contents-open')) closeContents();
+  else openContents();
 });
 document.addEventListener('keydown', event => {
   if (event.defaultPrevented || $('page-turn-speed-panel').contains(event.target) || $('modal').open
+    || event.target.closest('.contents-panel, #contents-toggle')
     || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.ctrlKey || event.metaKey || event.altKey) return;
   if (['ArrowRight', 'ArrowLeft'].includes(event.key)) {
     event.preventDefault();

@@ -43,15 +43,21 @@
     <aside id="book-contents" class="contents-panel" aria-label="Book contents">
       <button id="contents-close" class="icon-button contents-close" type="button" aria-label="Close contents">×</button>
       <div class="book-meta"><div id="book-type" class="small-label">A FOLIO ORIGINAL</div><h1 id="book-title">The Art of Noticing</h1><p id="book-author">A small guide to being here</p></div>
-      <div class="contents-heading"><h2>Contents</h2></div>
+      <div class="contents-heading"><h2>Contents</h2><span id="contents-count" class="contents-count" aria-live="polite"></span></div>
+      <div class="contents-filter">
+        <label for="contents-search">Find a section</label>
+        <div class="contents-search-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="contents-search" type="search" placeholder="Filter section titles" autocomplete="off" spellcheck="false"><button id="contents-clear" type="button" aria-label="Clear section filter" hidden>&times;</button></div>
+      </div>
+      <div class="contents-location"><span>SECTION / PDF PAGE</span><button id="contents-current" class="text-button" type="button">Current section <span aria-hidden="true">&darr;</span></button></div>
       <nav id="chapter-list" aria-label="Chapters"></nav>
-      <p id="chapter-note" class="chapter-note"></p>
-      <div class="privacy-note"><span class="status-dot" aria-hidden="true"></span> Kept here, on your own shelf.</div>
-      <button id="launch-help" class="text-button" type="button">Make yourself a reading corner <span aria-hidden="true">↗</span></button>
-      <button id="drop-zone" class="drop-zone reading-corner" type="button" aria-label="Drop your PDF here, or browse for a PDF">
-        <img class="reading-corner-books" src="/images/reading-corner-books.png" alt="" width="941" height="1672">
-        <span class="reading-corner-copy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 15v5h16v-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Drop your<br>PDF here</span><small>or browse</small></span>
-      </button>
+      <details id="contents-analysis" class="contents-analysis"><summary><span id="contents-analysis-label">Document analysis</span></summary><p id="chapter-note" class="chapter-note"></p></details>
+      <div class="contents-utilities">
+        <button id="drop-zone" class="drop-zone reading-corner" type="button" aria-label="Drop your PDF here, or browse for a PDF">
+          <img class="reading-corner-books" src="/images/reading-corner-books.png" alt="" width="941" height="1672">
+          <span class="reading-corner-copy"><span>Open another PDF</span><small>Drop here or browse <span aria-hidden="true">&nearr;</span></small></span>
+        </button>
+        <div class="contents-utility-note"><div class="privacy-note"><span class="status-dot" aria-hidden="true"></span> Stored on this device</div><button id="launch-help" class="text-button" type="button">Reading corner help <span aria-hidden="true">&nearr;</span></button></div>
+      </div>
     </aside>
     <section class="reader-panel" aria-label="Reader">
       <div class="reader-toolbar"><button id="contents-toggle" class="quiet-button mobile-contents" type="button" aria-expanded="false" aria-controls="book-contents">Contents</button><div class="view-switch" role="group" aria-label="Reading view"><button id="book-view" class="view-button active" type="button" aria-pressed="true">Book view</button><button id="original-view" class="view-button" type="button" aria-pressed="false">Original PDF</button></div><div class="reading-layout-switch" role="group" aria-label="Reading layout"><span class="page-turn-speed-pair"><button id="pages-layout" class="layout-button active" type="button" aria-pressed="true" title="Smooth book page turns (S)">Page flip</button>
